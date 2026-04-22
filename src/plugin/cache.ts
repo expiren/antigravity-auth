@@ -86,6 +86,8 @@ const SIGNATURE_CACHE_TTL_MS = 60 * 60 * 1000;
 // Maximum entries per session to prevent memory bloat
 const MAX_ENTRIES_PER_SESSION = 100;
 
+// Maximum sessions tracked in the outer Map to prevent unbounded growth
+const MAX_CACHED_SESSIONS = 10;
 // 16 hex chars = 64-bit key space; keeps memory bounded while making collisions extremely unlikely.
 const SIGNATURE_TEXT_HASH_HEX_LEN = 16;
 
@@ -125,6 +127,50 @@ function makeDiskKey(sessionId: string, textHash: string): string {
 }
 
 /**
+ * Prune stale sessions from the outer signatureCache Map.
+ * Removes sessions where all entries have expired, then evicts the
+ * oldest sessions if the Map still exceeds MAX_CACHED_SESSIONS.
+ */
+function pruneSignatureSessions(): void {
+  if (signatureCache.size <= MAX_CACHED_SESSIONS) return;
+
+  const now = Date.now();
+
+  // First pass: remove sessions where ALL entries are expired
+  for (const [sid, innerMap] of signatureCache) {
+    let allExpired = true;
+    for (const entry of innerMap.values()) {
+      if (now - entry.timestamp <= SIGNATURE_CACHE_TTL_MS) {
+        allExpired = false;
+        break;
+      }
+    }
+    if (allExpired) {
+      signatureCache.delete(sid);
+    }
+  }
+
+  // Second pass: if still over cap, evict oldest sessions by newest entry timestamp
+  if (signatureCache.size > MAX_CACHED_SESSIONS) {
+    const sessionsByAge: Array<{ sid: string; newestTs: number }> = [];
+    for (const [sid, innerMap] of signatureCache) {
+      let newestTs = 0;
+      for (const entry of innerMap.values()) {
+        if (entry.timestamp > newestTs) newestTs = entry.timestamp;
+      }
+      sessionsByAge.push({ sid, newestTs });
+    }
+    // Sort oldest-first, evict until at cap
+    sessionsByAge.sort((a, b) => a.newestTs - b.newestTs);
+    const toEvict = signatureCache.size - MAX_CACHED_SESSIONS;
+    for (let i = 0; i < toEvict; i++) {
+      const entry = sessionsByAge[i];
+      if (entry) signatureCache.delete(entry.sid);
+    }
+  }
+}
+
+/**
  * Caches a thinking signature for a given session and text.
  * Used for Claude models that require signed thinking blocks in multi-turn conversations.
  * Also writes to disk cache if enabled.
@@ -137,10 +183,11 @@ export function cacheSignature(sessionId: string, text: string, signature: strin
   // Write to memory cache
   let sessionMemCache = signatureCache.get(sessionId);
   if (!sessionMemCache) {
+    // About to add a new session — prune stale ones first
+    pruneSignatureSessions();
     sessionMemCache = new Map();
     signatureCache.set(sessionId, sessionMemCache);
   }
-
   // Evict old entries if we're at capacity
   if (sessionMemCache.size >= MAX_ENTRIES_PER_SESSION) {
     const now = Date.now();
