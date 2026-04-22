@@ -978,10 +978,10 @@ it("removes x-api-key header", () => {
       expect(wrapped.request.contents).toHaveLength(3);
       // Entry with empty parts preserved as-is
       expect(wrapped.request.contents[0].role).toBe("user");
-      // Entry with valid parts keeps them (null parts filtered within)
+      // Entry with valid parts keeps them (invalid parts replaced with sentinel to preserve indices)
       expect(wrapped.request.contents[1]).toEqual({
         role: "model",
-        parts: [{ text: "kept" }],
+        parts: [{ text: "." }, { text: "kept" }],
       });
       expect(wrapped.request.systemInstruction.parts).toEqual([{ text: "system kept" }]);    });
 

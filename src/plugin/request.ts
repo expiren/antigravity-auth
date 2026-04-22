@@ -425,7 +425,13 @@ function sanitizeRequestPayloadForAntigravity(payload: Record<string, unknown>):
         const rawParts = Array.isArray(contentRecord.parts) ? contentRecord.parts : [];
         let foundFirstFunctionCall = false;
 
-        const sanitizedParts = rawParts.filter(isValidRequestPart).map((part: any) => {
+        const sanitizedParts = rawParts.map((part: any) => {
+          // Replace invalid parts with sentinel to preserve array indices for cache stability
+          if (!isValidRequestPart(part)) {
+            return { text: "." };
+          }
+          return part;
+        }).map((part: any) => {
           if (part && typeof part === "object" && part.functionCall) {
             let sig = part.thoughtSignature || part.thought_signature;
 
@@ -1129,8 +1135,8 @@ export function prepareAntigravityRequest(
             const partsValue = sys.parts;
 
             if (Array.isArray(partsValue)) {
-              // Append hint as a NEW separate part — never mutate existing parts text (cache-friendly)
-              (partsValue as unknown[]).push({ text: hint });
+              // Append hint as a NEW separate part — spread to avoid mutating shared array reference
+              sys.parts = [...partsValue, { text: hint }];
             } else {
               sys.parts = [{ text: hint }];
             }
@@ -1503,10 +1509,10 @@ export function prepareAntigravityRequest(
 
         body = safeStringify(wrappedBody);
       }
-    } catch (error) {
-      throw error;    }
+    } catch {
+      throw new Error("Failed to build Antigravity request body");
+    }
   }
-
   if (streaming) {
     headers.set("Accept", "text/event-stream");
   }

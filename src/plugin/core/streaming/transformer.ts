@@ -95,7 +95,8 @@ export function deduplicateThinkingText(
             if (displayedThinkingHashes.has(hash)) {
               sentBuffer.set(index, fullText);
               // Sentinel instead of null — preserves array length on response path
-              return { text: "" };
+              // Use dot (not empty string) — empty text is dropped by proxy on next turn
+              return { text: "." };
             }
             displayedThinkingHashes.add(hash);
           }
@@ -111,7 +112,8 @@ export function deduplicateThinkingText(
               return { thought: true, text: delta };
             }
             // Sentinel instead of null — preserves array length on response path
-            return { text: "" };
+            // Use dot (not empty string) — empty text is dropped by proxy on next turn
+            return { text: "." };
           }
 
           sentBuffer.set(index, fullText);
@@ -140,7 +142,8 @@ export function deduplicateThinkingText(
             sentBuffer.set(thinkingIndex, fullText);
             thinkingIndex++;
             // Sentinel instead of null — preserves array length on response path
-            return { type: "text", text: "" };
+            // Use dot (not empty string) — empty text is dropped by proxy on next turn
+            return { type: "text", text: "." };
           }
           displayedThinkingHashes.add(hash);
         }
@@ -157,7 +160,8 @@ export function deduplicateThinkingText(
             return { type: b.type, thinking: delta, text: delta };
           }
           // Sentinel instead of null — preserves array length on response path
-          return { type: "text", text: "" };
+          // Use dot (not empty string) — empty text is dropped by proxy on next turn
+          return { type: "text", text: "." };
         }
 
         sentBuffer.set(thinkingIndex, fullText);
