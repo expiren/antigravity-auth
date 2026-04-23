@@ -948,12 +948,33 @@ export function prepareAntigravityRequest(
           }
         }
 
+        // Guard against assistant prefill: Claude rejects conversations ending
+        // with model/assistant messages. After context compaction, the conversation
+        // can end with a model message — append synthetic user message to fix.
+        if (isClaude) {
+          for (const req of requestObjects) {
+            if (Array.isArray((req as any).contents)) {
+              const contents = (req as any).contents;
+              const lastContent = contents[contents.length - 1];
+              if (lastContent?.role === "model" || lastContent?.role === "assistant") {
+                contents.push({ role: "user", parts: [{ text: "[Continue]" }] });
+              }
+            }
+            if (Array.isArray((req as any).messages)) {
+              const messages = (req as any).messages;
+              const lastMessage = messages[messages.length - 1];
+              if (lastMessage?.role === "model" || lastMessage?.role === "assistant") {
+                messages.push({ role: "user", parts: [{ text: "[Continue]" }] });
+              }
+            }
+          }
+        }
+
         if (isClaudeThinking && keepThinkingEnabled && sessionId) {
           const hasToolUse = requestObjects.some((req) =>
             (Array.isArray((req as any).contents) && hasToolUseInContents((req as any).contents)) ||
             (Array.isArray((req as any).messages) && hasToolUseInMessages((req as any).messages)),
-          );
-          const hasSignedThinking = requestObjects.some((req) =>
+          );          const hasSignedThinking = requestObjects.some((req) =>
             (Array.isArray((req as any).contents) && hasSignedThinkingInContents((req as any).contents, signatureSessionKey)) ||
             (Array.isArray((req as any).messages) && hasSignedThinkingInMessages((req as any).messages, signatureSessionKey)),
           );
@@ -1490,13 +1511,30 @@ export function prepareAntigravityRequest(
           }
         }
 
+        // Guard against assistant prefill: Claude rejects conversations ending
+        // with model/assistant messages. After context compaction, the conversation
+        // can end with a model message — append synthetic user message to fix.
+        if (isClaude) {
+          if (Array.isArray(requestPayload.contents)) {
+            const lastContent = requestPayload.contents[requestPayload.contents.length - 1] as any;
+            if (lastContent?.role === "model" || lastContent?.role === "assistant") {
+              requestPayload.contents.push({ role: "user", parts: [{ text: "[Continue]" }] });
+            }
+          }
+          if (Array.isArray(requestPayload.messages)) {
+            const lastMessage = (requestPayload.messages as any[])[requestPayload.messages.length - 1];
+            if (lastMessage?.role === "model" || lastMessage?.role === "assistant") {
+              (requestPayload.messages as any[]).push({ role: "user", parts: [{ text: "[Continue]" }] });
+            }
+          }
+        }
+
         if ("model" in requestPayload) {
           delete requestPayload.model;
         }
 
         stripInjectedDebugFromRequestPayload(requestPayload);
         sanitizeRequestPayloadForAntigravity(requestPayload);
-
         const effectiveProjectId = projectId?.trim() || (headerStyle === "antigravity" ? generateSyntheticProjectId() : "");
         resolvedProjectId = effectiveProjectId;
 
