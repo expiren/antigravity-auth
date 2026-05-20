@@ -170,6 +170,12 @@ export const OPENCODE_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
     limit: { context: 1048576, output: 65535 },
     modalities: DEFAULT_MODALITIES,
   }),
+  "gemini-3.5-flash-preview": defineModel("gemini-3.5-flash-preview", {
+    name: "Gemini 3.5 Flash Preview (Gemini CLI)",
+    reasoning: true,
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  }),
   "gemini-3.1-pro-preview-customtools": defineModel("gemini-3.1-pro-preview-customtools", {
     name: "Gemini 3.1 Pro Preview Custom Tools (Gemini CLI)",
     reasoning: true,

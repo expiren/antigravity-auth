@@ -1,0 +1,230 @@
+# Architecture
+
+## Pattern Overview
+
+**Overall:** OpenCode plugin — fetch-interceptor that transforms Gemini API requests into Antigravity (Cloud Code Assist) format, with OAuth multi-account rotation, quota management, session recovery, and cross-model compatibility.
+
+**Key Characteristics:**
+- Single `createAntigravityPlugin` factory exported from `src/plugin.ts` that returns the full OpenCode plugin surface
+- All outbound traffic to `generativelanguage.googleapis.com` is intercepted and rewritten before it leaves the process
+- Two header-style routing paths: `antigravity` (Electron-style UA + fingerprint) and `gemini-cli` (nodejs-client UA)
+- All state (accounts, rate-limit counters, health scores) is module-level; the plugin factory runs once per session
+- Config schema is Zod-validated; environment variables always override file config
+
+---
+
+## Layers
+
+**Entry Point / Orchestrator:**
+- Purpose: Intercepts fetch calls, manages auth lifecycle, routes requests, handles rate-limit retry loops
+- Location: `src/plugin.ts`
+- Contains: `createAntigravityPlugin` factory, rate-limit state machines, toast debounce, OAuth login flows, verification probe, account persistence helpers
+- Depends on: Every other layer
+- Used by: OpenCode host via `@opencode-ai/plugin` contract
+
+**OAuth / Credentials:**
+- Purpose: OAuth token exchange with Google, token refresh, access-token lifecycle
+- Location: `src/antigravity/oauth.ts`, `src/plugin/auth.ts`, `src/plugin/token.ts`
+- Contains: `authorizeAntigravity`, `exchangeAntigravity`, `refreshAccessToken`, `AntigravityTokenRefreshError`, token expiry helpers
+- Depends on: `@openauthjs/openauth`, `src/constants.ts`
+- Used by: `src/plugin.ts`, `src/plugin/refresh-queue.ts`
+
+**Request Transform:**
+- Purpose: Convert OpenCode/Anthropic-format request bodies into Antigravity (Cloud Code Assist) wire format and back
+- Location: `src/plugin/request.ts`, `src/plugin/request-helpers.ts`, `src/plugin/transform/`
+- Contains: `prepareAntigravityRequest`, `transformAntigravityResponse`, schema cleaning, thinking-block stripping, tool-hardening injection, cross-model sanitisation
+- Depends on: `src/constants.ts`, `src/plugin/transform/`, `src/plugin/thinking-recovery.ts`, `src/plugin/cache/`
+- Used by: `src/plugin.ts`
+
+**Model Resolution & Per-Model Transforms:**
+- Purpose: Map request model names to Antigravity model IDs, choose header style (antigravity vs gemini-cli), apply model-specific config
+- Location: `src/plugin/transform/model-resolver.ts`, `src/plugin/transform/claude.ts`, `src/plugin/transform/gemini.ts`, `src/plugin/transform/cross-model-sanitizer.ts`
+- Contains: `resolveModelWithTier`, `resolveModelWithVariant`, `resolveModelForHeaderStyle`, `applyClaudeTransforms`, `applyGeminiTransforms`, `sanitizeCrossModelPayload`
+- Depends on: `src/plugin/transform/types.ts`
+- Used by: `src/plugin/request.ts`
+
+**Multi-Account Management:**
+- Purpose: Track per-account OAuth state, rate-limit cooldowns, quota cache, and fingerprints; select the best account for each request
+- Location: `src/plugin/accounts.ts`, `src/plugin/storage.ts`, `src/plugin/rotation.ts`, `src/plugin/fingerprint.ts`
+- Contains: `AccountManager`, `HealthScoreTracker`, `TokenBucketTracker`, `selectHybridAccount`, `generateFingerprint`, `buildFingerprintHeaders`
+- Depends on: `src/plugin/auth.ts`, `src/plugin/quota.ts`, `proper-lockfile`, `xdg-basedir`
+- Used by: `src/plugin.ts`
+
+**Token Refresh Queue:**
+- Purpose: Background proactive OAuth token refresh so requests never block on expiry
+- Location: `src/plugin/refresh-queue.ts`
+- Contains: `ProactiveRefreshQueue`, `createProactiveRefreshQueue`
+- Depends on: `src/plugin/accounts.ts`, `src/plugin/token.ts`
+- Used by: `src/plugin.ts`
+
+**Quota:**
+- Purpose: Query Antigravity API for per-account quota usage; populate quota cache used by AccountManager for soft-quota gating
+- Location: `src/plugin/quota.ts`
+- Contains: `checkAccountsQuota`, `QuotaGroup`, `QuotaGroupSummary`
+- Depends on: OAuth token utilities
+- Used by: `src/plugin.ts` (async background refresh), `src/plugin/accounts.ts`
+
+**Session Recovery:**
+- Purpose: Detect interrupted tool executions (`tool_result_missing`) and malformed thinking blocks; inject synthetic completions to restore session
+- Location: `src/plugin/recovery/` (`index.ts`, `types.ts`, `constants.ts`, `storage.ts`), `src/plugin/thinking-recovery.ts`
+- Contains: `createSessionRecoveryHook`, `isRecoverableError`, `handleSessionRecovery`, `analyzeConversationState`, `closeToolLoopForThinking`
+- Depends on: OpenCode session client API
+- Used by: `src/plugin.ts` event handler
+
+**Signature Cache:**
+- Purpose: Persist and recall Claude thinking-block signatures across requests and restarts when `keep_thinking` is enabled
+- Location: `src/plugin/cache/` (`index.ts`, `signature-cache.ts`), `src/plugin/stores/signature-store.ts`
+- Contains: `SignatureCache`, `createSignatureCache`, `defaultSignatureStore`
+- Depends on: `src/plugin/config/`
+- Used by: `src/plugin/request.ts`
+
+**Streaming Core:**
+- Purpose: Transform SSE stream payloads line-by-line; cache signatures; inject debug annotations
+- Location: `src/plugin/core/streaming/` (`transformer.ts`, `types.ts`, `index.ts`)
+- Contains: `createStreamingTransformer`, `transformSseLine`, `transformStreamingPayload`
+- Depends on: `src/plugin/stores/signature-store.ts`
+- Used by: `src/plugin/request.ts`
+
+**Configuration:**
+- Purpose: Load, merge, and validate plugin configuration from files and environment variables
+- Location: `src/plugin/config/` (`schema.ts`, `loader.ts`, `models.ts`, `updater.ts`, `index.ts`)
+- Contains: `AntigravityConfigSchema`, `loadConfig`, `initRuntimeConfig`, `AntigravityConfig`
+- Depends on: `zod`
+- Used by: `src/plugin.ts`, most `src/plugin/` modules via `getKeepThinking()` etc.
+
+**Auto-Update Checker Hook:**
+- Purpose: On `session.created`, check npm for a newer plugin version and optionally auto-update the pinned version in `opencode.json`
+- Location: `src/hooks/auto-update-checker/` (`index.ts`, `checker.ts`, `cache.ts`, `logging.ts`, `constants.ts`, `types.ts`)
+- Contains: `createAutoUpdateCheckerHook`, `getLatestVersion`, `updatePinnedVersion`
+- Depends on: npm registry HTTP, OpenCode TUI toast API
+- Used by: `src/plugin.ts`
+
+**Google Search Tool:**
+- Purpose: Expose a `google_search` OpenCode tool that runs separate Antigravity API calls with native grounding tools
+- Location: `src/plugin/search.ts`
+- Contains: `executeSearch`
+- Depends on: `src/constants.ts`, `src/plugin/logger.ts`
+- Used by: `src/plugin.ts` (registers tool via `@opencode-ai/plugin` `tool()`)
+
+**Logging / Debug:**
+- Purpose: Structured per-module logger with TUI integration; detailed debug file logging for request/response inspection
+- Location: `src/plugin/logger.ts`, `src/plugin/debug.ts`, `src/plugin/logging-utils.ts`
+- Contains: `createLogger`, `initLogger`, `initializeDebug`, `isDebugEnabled`, `logAntigravityDebugResponse`
+- Depends on: OpenCode TUI client
+- Used by: All modules
+
+**Errors:**
+- Purpose: Domain-specific error classes with metadata
+- Location: `src/plugin/errors.ts`
+- Contains: `EmptyResponseError`, and other typed error classes
+- Depends on: nothing
+- Used by: `src/plugin.ts`, `src/plugin/request.ts`
+
+**CLI / UI:**
+- Purpose: Interactive terminal prompts for login, account selection, and project ID entry
+- Location: `src/plugin/cli.ts`, `src/plugin/ui/` (`auth-menu.ts`, `ansi.ts`, `confirm.ts`, `select.ts`)
+- Contains: `promptLoginMode`, `promptAddAnotherAccount`, `promptProjectId`, `AuthMenu`
+- Depends on: Node.js readline
+- Used by: `src/plugin.ts` auth flow
+
+---
+
+## Data Flow
+
+**Request Transform Pipeline:**
+1. OpenCode calls plugin `loader()` with the original request — `src/plugin.ts`
+2. `isGenerativeLanguageRequest()` confirms the URL matches — `src/plugin/request.ts`
+3. `AccountManager.selectAccount()` picks the best OAuth account — `src/plugin/accounts.ts`
+4. `resolveModelWithTier()` maps model name → Antigravity model ID + header style — `src/plugin/transform/model-resolver.ts`
+5. `prepareAntigravityRequest()` cleans schema, strips thinking blocks, injects tool-hardening, composes headers — `src/plugin/request.ts`, `src/plugin/request-helpers.ts`
+6. `buildFingerprintHeaders()` attaches per-account device fingerprint — `src/plugin/fingerprint.ts`
+7. `fetch()` is called against Antigravity endpoint with Bearer token — `src/plugin.ts`
+8. `transformAntigravityResponse()` converts SSE stream back to Gemini API format — `src/plugin/request.ts`
+9. Streaming transformer processes each SSE line, caches signatures, injects debug — `src/plugin/core/streaming/`
+
+**Rate-Limit Retry Loop:**
+1. 429 / 503 response received — `src/plugin.ts`
+2. `parseRateLimitReason()` classifies the error — `src/plugin/accounts.ts`
+3. `getRateLimitBackoff()` computes exponential delay with deduplication — `src/plugin.ts`
+4. `AccountManager.markRateLimited()` records cooldown — `src/plugin/accounts.ts`
+5. If other accounts available, `selectAccount()` switches — `src/plugin/accounts.ts`
+6. Loop retries until success or `max_rate_limit_wait_seconds` exceeded
+
+**OAuth Login Flow:**
+1. `auth.login()` invoked by OpenCode host — `src/plugin.ts`
+2. `authorizeAntigravity()` generates authorization URL — `src/antigravity/oauth.ts`
+3. Local HTTP listener or manual URL paste captures callback — `src/plugin/server.ts`
+4. `exchangeAntigravity()` exchanges code → tokens — `src/antigravity/oauth.ts`
+5. `persistAccountPool()` merges into `antigravity-accounts.json` — `src/plugin.ts`, `src/plugin/storage.ts`
+
+**Session Recovery:**
+1. `session.error` event fires — `src/plugin.ts` event handler
+2. `isRecoverableError()` checks error type — `src/plugin/recovery/`
+3. `handleSessionRecovery()` injects synthetic `tool_result` blocks — `src/plugin/recovery/`
+4. If `auto_resume`, plugin sends a "continue" prompt via `client.session.prompt()` — `src/plugin.ts`
+
+---
+
+## Key Abstractions
+
+**`AccountManager`:**
+- Purpose: Single source of truth for all OAuth accounts, their cooldowns, health scores, quota caches, and fingerprints
+- Location: `src/plugin/accounts.ts`
+- Pattern: Stateful class with selection algorithms (`sticky`, `round-robin`, `hybrid`) delegating to `HealthScoreTracker` and `TokenBucketTracker`
+
+**`AntigravityConfig` / `AntigravityConfigSchema`:**
+- Purpose: Zod-validated runtime configuration with environment variable overrides
+- Location: `src/plugin/config/schema.ts`, `src/plugin/config/loader.ts`
+- Pattern: Zod schema → `z.infer<>` type, merged from project file + user file + env vars
+
+**`HeaderStyle`:**
+- Purpose: Discriminate between `antigravity` (Electron UA) and `gemini-cli` (nodejs UA) request paths
+- Location: `src/constants.ts`, `src/plugin/transform/model-resolver.ts`
+- Pattern: String literal union; resolved per model name suffix (`:antigravity` vs no suffix)
+
+**`ModelFamily`:**
+- Purpose: Route model-specific logic (`claude` vs `gemini`)
+- Location: `src/plugin/storage.ts` (type), `src/plugin/transform/model-resolver.ts`
+- Pattern: Discriminated string union used by `AccountManager`, `quota.ts`, and rate-limit key construction
+
+**`SignatureStore` / `SignatureCache`:**
+- Purpose: Cache Claude thinking-block signatures in memory and optionally on disk, keyed by session
+- Location: `src/plugin/core/streaming/types.ts`, `src/plugin/cache/signature-cache.ts`, `src/plugin/stores/signature-store.ts`
+- Pattern: Map-based store with TTL; disk layer uses JSON file with background flush interval
+
+---
+
+## Entry Points
+
+**Plugin Factory:**
+- Location: `src/plugin.ts` → `createAntigravityPlugin(providerId)`
+- Triggers: OpenCode loads `index.ts` which imports and calls `createAntigravityPlugin("google")`
+- Responsibilities: Initialize all subsystems, register auth methods, return `PluginResult` with `loader`, `auth`, `event`, and `tool` surfaces
+
+**Root Index:**
+- Location: `index.ts`
+- Triggers: OpenCode plugin host imports the package
+- Responsibilities: Re-export `createAntigravityPlugin` as the package entry
+
+**Auto-Update Hook:**
+- Location: `src/hooks/auto-update-checker/index.ts`
+- Triggers: `session.created` event
+- Responsibilities: Compare current vs latest npm version; update `opencode.json` pin if auto-update enabled
+
+---
+
+## Error Handling
+
+**Strategy:** Defensive try/catch with graceful degradation — fallback values rather than crashes. Rate-limit and quota errors trigger account rotation, not failure. Session errors trigger recovery injection. Empty responses retry up to `empty_response_max_attempts` times before returning a synthetic error response. Token refresh failures throw typed `AntigravityTokenRefreshError`. Unknown errors are caught, logged, and surfaced as domain errors to callers.
+
+---
+
+## Cross-Cutting Concerns
+
+**Logging:** `createLogger("module-name")` from `src/plugin/logger.ts` for structured per-module logging with dual sinks: TUI log panel (`debug_tui`) and debug file (`debug`). `console.log` only in CLI / interactive auth flows.
+
+**Caching:** In-memory signature store for thinking blocks; optional disk persistence via `SignatureCache` when `keep_thinking` is enabled. Auth tokens cached per-account in `AccountManager`. Quota data cached per-account with configurable TTL.
+
+**Storage:** Accounts persisted to `antigravity-accounts.json` (XDG data dir) via `src/plugin/storage.ts` with `proper-lockfile` for concurrent-write safety. Config loaded from `.opencode/antigravity.json` (project) and `~/.config/opencode/antigravity.json` (user).
+
+**Configuration:** Two-level config file hierarchy (project overrides user) plus environment variable overrides. All config is read once at startup via `loadConfig()` and made available globally via `initRuntimeConfig()` and module-level getters.
