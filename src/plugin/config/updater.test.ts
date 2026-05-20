@@ -66,9 +66,8 @@ describe("updateOpencodeConfig", () => {
     // Old model should be replaced
     expect(writtenConfig.provider.google.models["old-model"]).toBeUndefined();
     // New models should be present
-    expect(writtenConfig.provider.google.models["antigravity-gemini-3-pro"]).toBeDefined();
-    expect(writtenConfig.provider.google.models["antigravity-claude-sonnet-4-6-thinking"]).toBeDefined();
-  });
+    expect(writtenConfig.provider.google.models["antigravity-gemini-3.1-pro"]).toBeDefined();
+    expect(writtenConfig.provider.google.models["antigravity-claude-sonnet-4-6-thinking"]).toBeDefined();  });
 
   test("preserves non-google provider sections", async () => {
     const existingConfig = {
@@ -258,9 +257,8 @@ describe("updateOpencodeConfig", () => {
     expect(writtenConfig.plugin).toContain("other-plugin");
     expect(writtenConfig.plugin).toContain("@expiren/opencode-antigravity-auth@latest");
     expect(writtenConfig.provider.google.region).toBe("us-central1");
-    expect(writtenConfig.provider.google.models["antigravity-gemini-3-pro"]).toBeDefined();
+    expect(writtenConfig.provider.google.models["antigravity-gemini-3.1-pro"]).toBeDefined();
   });
-
   test("prefers existing opencode.jsonc when using default config path", async () => {
     const opencodeDir = path.join(tempDir, "opencode");
     const jsonPath = path.join(opencodeDir, "opencode.json");

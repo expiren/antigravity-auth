@@ -17,8 +17,6 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
     expect(modelNames).toEqual([
       "antigravity-claude-opus-4-6-thinking",
       "antigravity-claude-sonnet-4-6-thinking",
-      "antigravity-gemini-3-flash",
-      "antigravity-gemini-3-pro",
       "antigravity-gemini-3.1-flash-image",
       "antigravity-gemini-3.1-pro",
       "antigravity-gemini-3.5-flash",
@@ -33,25 +31,19 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       "gemini-3.5-flash-preview",
     ]);  });
 
-  it("defines Gemini 3 variants for Antigravity models", () => {
-    expect(getModel("antigravity-gemini-3-pro").variants).toEqual({
-      low: { thinkingLevel: "low" },
-      high: { thinkingLevel: "high" },
-    });
-
+  it("defines Gemini variants for Antigravity models", () => {
     expect(getModel("antigravity-gemini-3.1-pro").variants).toEqual({
       low: { thinkingLevel: "low" },
       high: { thinkingLevel: "high" },
     });
 
-    expect(getModel("antigravity-gemini-3-flash").variants).toEqual({
+    expect(getModel("antigravity-gemini-3.5-flash").variants).toEqual({
       minimal: { thinkingLevel: "minimal" },
       low: { thinkingLevel: "low" },
       medium: { thinkingLevel: "medium" },
       high: { thinkingLevel: "high" },
     });
   });
-
   it("defines thinking budget variants for Claude thinking models", () => {
     expect(getModel("antigravity-claude-opus-4-6-thinking").variants).toEqual({
       low: { thinkingConfig: { thinkingBudget: 8192 } },
