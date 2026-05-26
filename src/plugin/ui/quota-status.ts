@@ -137,7 +137,7 @@ export function formatQuotaStatusBadge(status: QuotaStatusInfo): string {
     case "EXHAUSTED": {
       const suffix = status.waitMs
         ? ` resets in ${formatWaitDuration(status.waitMs)}`
-        : " resets in ?h"
+        : ""
       return `${ANSI.red}[EXHAUSTED${suffix}]${ANSI.reset}`
     }
 
@@ -176,7 +176,7 @@ export function formatQuotaStatusPlain(status: QuotaStatusInfo): string {
     case "EXHAUSTED": {
       const suffix = status.waitMs
         ? ` resets in ${formatWaitDuration(status.waitMs)}`
-        : " resets in ?h"
+        : ""
       return `EXHAUSTED${suffix}`
     }
 
@@ -194,16 +194,63 @@ export function formatQuotaStatusPlain(status: QuotaStatusInfo): string {
 }
 
 /**
+ * Classify the overall quota health of an account across all model groups.
+ * Returns "exhausted" when ALL groups with data are at 0%, "partial" when
+ * some but not all are exhausted, or "available" when none are exhausted.
+ */
+export function classifyOverallQuotaHealth(
+  cachedQuota: Partial<Record<string, { remainingFraction?: number, resetTime?: string }>> | undefined,
+): { health: "available" | "partial" | "exhausted" | "unknown", maxResetMs?: number } {
+  if (!cachedQuota) {
+    return { health: "unknown" }
+  }
+
+  const QUOTA_KEYS = ["claude", "gemini-pro", "gemini-flash"]
+  let groupsWithData = 0
+  let exhaustedCount = 0
+  let maxResetMs: number | undefined
+
+  for (const key of QUOTA_KEYS) {
+    const value = cachedQuota[key]?.remainingFraction
+    if (typeof value !== "number" || !Number.isFinite(value)) continue
+    groupsWithData++
+    if (value <= 0) {
+      exhaustedCount++
+      const resetMs = parseResetTimeToMs(cachedQuota[key]?.resetTime)
+      if (resetMs !== null && (maxResetMs === undefined || resetMs > maxResetMs)) {
+        maxResetMs = resetMs
+      }
+    }
+  }
+
+  if (groupsWithData === 0) return { health: "unknown" }
+  if (exhaustedCount === groupsWithData) return { health: "exhausted", maxResetMs }
+  if (exhaustedCount > 0) return { health: "partial", maxResetMs }
+  return { health: "available" }
+}
+
+/**
  * Build a quota summary string with status labels for cached quota data.
  * Used in auth menu account hints.
  *
- * Example: "Claude READY 80%, Gemini Pro LOW 15%, Gemini Flash EXHAUSTED"
+ * When all groups are exhausted, returns a single condensed "resets in Xh Ym"
+ * instead of listing each model separately.
+ *
+ * Example: "Claude 80%, Gemini Flash LOW 15%"
  */
 export function formatCachedQuotaWithStatus(
   cachedQuota: Partial<Record<string, { remainingFraction?: number, resetTime?: string }>> | undefined,
 ): string | undefined {
   if (!cachedQuota) {
     return undefined
+  }
+
+  // When all groups are exhausted, don't list each model — the badge handles it
+  const overall = classifyOverallQuotaHealth(cachedQuota)
+  if (overall.health === "exhausted") {
+    return overall.maxResetMs
+      ? `resets in ${formatWaitDuration(overall.maxResetMs)}`
+      : undefined
   }
 
   const entries = [

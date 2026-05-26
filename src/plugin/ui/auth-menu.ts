@@ -4,8 +4,10 @@ import { confirm } from './confirm';
 import type { CooldownReason } from '../accounts';
 import {
   classifyGroupStatus,
+  classifyOverallQuotaHealth,
   buildCooldownStatus,
   formatQuotaStatusBadge,
+  formatWaitDuration,
 } from './quota-status';
 import type { QuotaGroupSummary } from '../quota';
 export type AccountStatus = 'active' | 'rate-limited' | 'expired' | 'verification-required' | 'unknown';
@@ -73,6 +75,17 @@ function getStatusBadge(status: AccountStatus | undefined, account?: AccountInfo
     return ` ${formatQuotaStatusBadge(cooldownStatus)}`;
   }
 
+  // For "active" accounts, check if quota data shows exhaustion
+  if (status === 'active' && account?.cachedQuota) {
+    const overall = classifyOverallQuotaHealth(account.cachedQuota);
+    if (overall.health === 'exhausted') {
+      const suffix = overall.maxResetMs
+        ? ` resets in ${formatWaitDuration(overall.maxResetMs)}`
+        : '';
+      return ` ${ANSI.red}[exhausted${suffix}]${ANSI.reset}`;
+    }
+  }
+
   // Then check account-level status
   switch (status) {
     case 'active': return ` ${ANSI.green}[active]${ANSI.reset}`;
@@ -98,12 +111,17 @@ export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAct
     { label: 'Accounts', value: { type: 'cancel' }, kind: 'heading' },
 
     ...accounts.slice().sort((a, b) => {
-      // Sort: current → active → rate-limited → expired/exhausted
+      // Sort: current → active (with quota) → active (exhausted) → rate-limited → expired/exhausted
       const statusOrder = (acc: AccountInfo): number => {
         if (acc.isCurrentAccount) return 0
-        if (acc.status === 'active') return 1
-        if (acc.status === 'rate-limited') return 2
-        return 3 // expired, verification-required, unknown
+        if (acc.status === 'active') {
+          // Push quota-exhausted active accounts below healthy ones
+          const overall = classifyOverallQuotaHealth(acc.cachedQuota)
+          if (overall.health === 'exhausted') return 2
+          return 1
+        }
+        if (acc.status === 'rate-limited') return 3
+        return 4 // expired, verification-required, unknown
       }
       return statusOrder(a) - statusOrder(b)
     }).map(account => {
