@@ -10,6 +10,7 @@ import {
   formatWaitDuration,
 } from './quota-status';
 import type { QuotaGroupSummary } from '../quota';
+import type { FingerprintVersion } from '../fingerprint';
 export type AccountStatus = 'active' | 'rate-limited' | 'expired' | 'verification-required' | 'unknown';
 
 export interface AccountInfo {
@@ -24,7 +25,7 @@ export interface AccountInfo {
   cooldownMs?: number;
   cooldownReason?: CooldownReason;
   cachedQuota?: Partial<Record<string, QuotaGroupSummary>>;
-  fingerprintHistory?: FingerprintHistoryEntry[];
+  fingerprintHistory?: FingerprintVersion[];
 }
 
 export type AuthMenuAction =
@@ -39,13 +40,6 @@ export type AuthMenuAction =
   | { type: 'verify-all' }
   | { type: 'configure-models' }
   | { type: 'cancel' };
-export interface FingerprintHistoryEntry {
-  deviceId: string;
-  userAgent: string;
-  timestamp: number;
-  reason: 'initial' | 'regenerated' | 'restored';
-}
-
 export type AccountAction = 'back' | 'delete' | 'refresh' | 'toggle' | 'verify' | 'restore-fingerprint' | 'switch-account' | 'cancel';
 
 export interface FingerprintRestoreResult {
@@ -125,6 +119,51 @@ function getHealthLabel(acc: AccountInfo): string {
   return 'other'
 }
 
+const QUOTA_KEYS: { key: string; label: string }[] = [
+  { key: 'claude', label: 'Claude' },
+  { key: 'gemini-pro', label: 'Gemini Pro' },
+  { key: 'gemini-flash', label: 'Gemini Flash' },
+]
+
+function parseResetTimeToMs(resetTime?: string): number | null {
+  if (!resetTime) return null
+  const timestamp = Date.parse(resetTime)
+  if (!Number.isFinite(timestamp)) return null
+  const ms = timestamp - Date.now()
+  return ms > 0 ? ms : null
+}
+
+function buildModelBreakdown(accounts: AccountInfo[]): string[] {
+  const results: string[] = []
+
+  for (const { key, label } of QUOTA_KEYS) {
+    let exhaustedCount = 0
+    let maxResetMs: number | undefined
+
+    for (const acc of accounts) {
+      if (acc.enabled === false) continue
+      const group = acc.cachedQuota?.[key]
+      if (!group || typeof group.remainingFraction !== 'number') continue
+      if (group.remainingFraction <= 0) {
+        exhaustedCount++
+        const resetMs = parseResetTimeToMs(group.resetTime)
+        if (resetMs !== null && (maxResetMs === undefined || resetMs > maxResetMs)) {
+          maxResetMs = resetMs
+        }
+      }
+    }
+
+    if (exhaustedCount > 0) {
+      const resetSuffix = maxResetMs !== undefined
+        ? ` ~${formatWaitDuration(maxResetMs)}`
+        : ''
+      results.push(`${label}: ${exhaustedCount} exhausted${resetSuffix}`)
+    }
+  }
+
+  return results
+}
+
 function buildAccountSummary(accounts: AccountInfo[]): string {
   const counts: Record<string, number> = {}
   for (const acc of accounts) {
@@ -135,7 +174,12 @@ function buildAccountSummary(accounts: AccountInfo[]): string {
   const parts = order
     .filter(label => (counts[label] ?? 0) > 0)
     .map(label => `${counts[label]} ${label}`)
-  return parts.length > 0 ? `Accounts (${parts.join(', ')})` : 'Accounts'
+
+  // Per-model exhaustion breakdown
+  const modelBreakdown = buildModelBreakdown(accounts)
+  const summary = parts.length > 0 ? parts.join(', ') : ''
+  const modelPart = modelBreakdown.length > 0 ? ` | ${modelBreakdown.join(', ')}` : ''
+  return summary ? `Accounts (${summary}${modelPart})` : 'Accounts'
 }
 
 function buildAccountHint(account: AccountInfo): string {
@@ -224,7 +268,7 @@ export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAct
   }
 }
 
-function formatFingerprintReason(reason: FingerprintHistoryEntry['reason']): string {
+function formatFingerprintReason(reason: FingerprintVersion['reason']): string {
   switch (reason) {
     case 'initial': return 'initial';
     case 'regenerated': return 'regenerated';
@@ -233,7 +277,7 @@ function formatFingerprintReason(reason: FingerprintHistoryEntry['reason']): str
 }
 
 export async function showFingerprintHistory(
-  history: FingerprintHistoryEntry[],
+  history: FingerprintVersion[],
   accountLabel: string,
 ): Promise<number | null> {
   const items: MenuItem<number | null>[] = [
@@ -241,7 +285,7 @@ export async function showFingerprintHistory(
     { label: '', value: null, separator: true },
     { label: 'Fingerprint history', value: null, kind: 'heading' },
     ...history.map((entry, index) => {
-      const deviceShort = entry.deviceId.slice(0, 8);
+      const deviceShort = entry.fingerprint.deviceId.slice(0, 8);
       const reasonBadge = `${ANSI.dim}[${formatFingerprintReason(entry.reason)}]${ANSI.reset}`;
       const label = `${index + 1}. ${deviceShort}... ${reasonBadge}`;
       const hint = formatRelativeTime(entry.timestamp);

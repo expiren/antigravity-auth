@@ -7,8 +7,8 @@ import {
   isTTY,
   type AccountInfo,
   type AccountStatus,
-  type FingerprintHistoryEntry,
 } from "./ui/auth-menu";
+import type { FingerprintVersion } from "./fingerprint";
 import { updateOpencodeConfig } from "./config/updater";
 import type { CooldownReason } from "./accounts";
 import type { QuotaGroupSummary } from "./quota";
@@ -47,7 +47,7 @@ export interface ExistingAccountInfo {
   cooldownMs?: number;
   cooldownReason?: CooldownReason;
   cachedQuota?: Partial<Record<string, QuotaGroupSummary>>;
-  fingerprintHistory?: FingerprintHistoryEntry[];
+  fingerprintHistory?: FingerprintVersion[];
 }
 
 export interface LoginMenuResult {

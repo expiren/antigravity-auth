@@ -2625,6 +2625,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     }
                   }
 
+                  const cooldownMs = (acc.coolingDownUntil && acc.coolingDownUntil > now)
+                    ? acc.coolingDownUntil - now
+                    : undefined;
+
                   return {
                     email: acc.email,
                     index: idx,
@@ -2634,8 +2638,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     isCurrentAccount: idx === (existingStorage.activeIndex ?? 0),
                     enabled: acc.enabled !== false,
                     quotaSummary: formatCachedQuotaSummary(acc),
-                  };
-                });
+                    cooldownMs,
+                    cooldownReason: cooldownMs ? acc.cooldownReason : undefined,
+                    cachedQuota: acc.cachedQuota,
+                    fingerprintHistory: acc.fingerprintHistory,
+                  };                });
                 
                 menuResult = await promptLoginMode(existingAccounts);
 
