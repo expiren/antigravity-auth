@@ -84,6 +84,9 @@ function getStatusBadge(status: AccountStatus | undefined, account?: AccountInfo
         : '';
       return ` ${ANSI.red}[exhausted${suffix}]${ANSI.reset}`;
     }
+    if (overall.health === 'partial') {
+      return ` ${ANSI.yellow}[limited]${ANSI.reset}`;
+    }
   }
 
   // Then check account-level status
@@ -111,17 +114,17 @@ export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAct
     { label: 'Accounts', value: { type: 'cancel' }, kind: 'heading' },
 
     ...accounts.slice().sort((a, b) => {
-      // Sort: current → active (with quota) → active (exhausted) → rate-limited → expired/exhausted
+      // Sort: current → active (healthy) → active (limited/partial) → active (exhausted) → rate-limited → expired
       const statusOrder = (acc: AccountInfo): number => {
         if (acc.isCurrentAccount) return 0
         if (acc.status === 'active') {
-          // Push quota-exhausted active accounts below healthy ones
           const overall = classifyOverallQuotaHealth(acc.cachedQuota)
-          if (overall.health === 'exhausted') return 2
+          if (overall.health === 'exhausted') return 3
+          if (overall.health === 'partial') return 2
           return 1
         }
-        if (acc.status === 'rate-limited') return 3
-        return 4 // expired, verification-required, unknown
+        if (acc.status === 'rate-limited') return 4
+        return 5 // expired, verification-required, unknown
       }
       return statusOrder(a) - statusOrder(b)
     }).map((account, displayIndex) => {
