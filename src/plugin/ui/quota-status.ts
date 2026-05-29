@@ -62,7 +62,9 @@ export function classifyGroupStatus(
     if (waitMs !== null && waitMs > 0) {
       return { label: "EXHAUSTED", waitMs }
     }
-    return { label: "EXHAUSTED" }
+    // resetTime is missing or in the past — quota likely already reset on Google's side.
+    // Treat as READY (fail-open) to avoid stale exhaustion display.
+    return { label: "READY" }
   }
 
   // Low: below 20%
@@ -215,10 +217,14 @@ export function classifyOverallQuotaHealth(
     if (typeof value !== "number" || !Number.isFinite(value)) continue
     groupsWithData++
     if (value <= 0) {
-      exhaustedCount++
+      // Skip stale exhaustion: if resetTime is missing or in the past,
+      // Google has likely already reset the quota — don't count as exhausted
       const resetMs = parseResetTimeToMs(cachedQuota[key]?.resetTime)
-      if (resetMs !== null && (maxResetMs === undefined || resetMs > maxResetMs)) {
-        maxResetMs = resetMs
+      if (resetMs !== null && resetMs > 0) {
+        exhaustedCount++
+        if (maxResetMs === undefined || resetMs > maxResetMs) {
+          maxResetMs = resetMs
+        }
       }
     }
   }

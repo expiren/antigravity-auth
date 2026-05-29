@@ -68,9 +68,17 @@ describe("classifyGroupStatus", () => {
     expect(classifyGroupStatus(group)).toEqual({ label: "LOW" })
   })
 
-  it("returns EXHAUSTED for 0% remaining", () => {
+  it("returns EXHAUSTED for 0% remaining with future reset time", () => {
+    const futureTime = new Date(Date.now() + 7200000).toISOString()
+    const group: QuotaGroupSummary = { remainingFraction: 0, resetTime: futureTime, modelCount: 1 }
+    const result = classifyGroupStatus(group)
+    expect(result.label).toBe("EXHAUSTED")
+    expect(result.waitMs).toBeGreaterThan(0)
+  })
+
+  it("returns READY for 0% remaining without reset time (stale cache)", () => {
     const group: QuotaGroupSummary = { remainingFraction: 0, modelCount: 1 }
-    expect(classifyGroupStatus(group)).toEqual({ label: "EXHAUSTED" })
+    expect(classifyGroupStatus(group)).toEqual({ label: "READY" })
   })
 
   it("returns EXHAUSTED with waitMs when reset time is in the future", () => {
@@ -86,14 +94,14 @@ describe("classifyGroupStatus", () => {
     expect(result.waitMs).toBeLessThanOrEqual(3600000)
   })
 
-  it("returns EXHAUSTED without waitMs when reset time is in the past", () => {
+  it("returns READY when reset time is in the past (stale cache — quota already reset)", () => {
     const pastTime = new Date(Date.now() - 60000).toISOString()
     const group: QuotaGroupSummary = {
       remainingFraction: 0,
       resetTime: pastTime,
       modelCount: 1,
     }
-    expect(classifyGroupStatus(group)).toEqual({ label: "EXHAUSTED" })
+    expect(classifyGroupStatus(group)).toEqual({ label: "READY" })
   })
 
   it("returns READY for NaN remaining fraction", () => {
@@ -260,22 +268,33 @@ describe("formatCachedQuotaWithStatus", () => {
   })
 
   it("formats EXHAUSTED groups without trailing 0%", () => {
+    const futureTime = new Date(Date.now() + 7200000).toISOString()
     const result = formatCachedQuotaWithStatus({
-      "gemini-flash": { remainingFraction: 0 },
+      "gemini-flash": { remainingFraction: 0, resetTime: futureTime },
     })
     // Single exhausted group — all groups exhausted, so formatCachedQuotaWithStatus
     // returns condensed reset info (undefined when no reset time)
     expect(result).toBeUndefined()
   })
 
+  it("treats stale 0% without reset time as READY (not exhausted)", () => {
+    const result = formatCachedQuotaWithStatus({
+      "gemini-flash": { remainingFraction: 0 },
+    })
+    // Stale cache: no resetTime means quota likely already reset — treated as READY
+    // READY at 0% still shows percentage (not hidden since pct < 100)
+    expect(result).toBe("Gemini Flash 0%")
+  })
+
   it("formats multiple groups with mixed status", () => {
+    const futureTime = new Date(Date.now() + 7200000).toISOString()
     const result = formatCachedQuotaWithStatus({
       claude: { remainingFraction: 0.8 },
       "gemini-pro": { remainingFraction: 0.1 },
-      "gemini-flash": { remainingFraction: 0 },
+      "gemini-flash": { remainingFraction: 0, resetTime: futureTime },
     })
-    // Not all exhausted, so per-model breakdown shown
-    expect(result).toBe("Claude 80%, Gemini Pro low 10%, Gemini Flash exhausted")
+    // Not all exhausted, so per-model breakdown shown; EXHAUSTED includes reset time
+    expect(result).toMatch(/^Claude 80%, Gemini Pro low 10%, Gemini Flash exhausted resets in \dh/)
   })
 
   it("hides groups at 100% READY", () => {
@@ -316,10 +335,15 @@ describe("formatGroupQuotaBadge", () => {
     expect(badge).toContain("[LOW]")
   })
 
-  it("returns EXHAUSTED badge for zero remaining", () => {
+  it("returns EXHAUSTED badge for zero remaining with future reset", () => {
+    const futureTime = new Date(Date.now() + 7200000).toISOString()
+    const badge = formatGroupQuotaBadge(0, futureTime)
+    expect(badge).toContain("[EXHAUSTED")
+  })
+
+  it("returns READY badge for zero remaining without reset time (stale)", () => {
     const badge = formatGroupQuotaBadge(0)
-    expect(badge).toContain("[EXHAUSTED]")
-    expect(badge).not.toContain("resets in")
+    expect(badge).toContain("[READY]")
   })
 
   it("returns READY badge for undefined remaining", () => {

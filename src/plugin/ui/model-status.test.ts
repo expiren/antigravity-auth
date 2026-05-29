@@ -117,8 +117,9 @@ describe("getModelStatusFromAccounts", () => {
   })
 
   it("picks best status across available accounts with quota data", () => {
+    const futureTime = new Date(Date.now() + 7200000).toISOString()
     const accounts = [
-      makeAccount({ quotaGroup: makeQuotaGroup(0) }),
+      makeAccount({ quotaGroup: makeQuotaGroup(0, futureTime) }),
       makeAccount({ quotaGroup: makeQuotaGroup(0.15) }),
     ]
     const result = getModelStatusFromAccounts(accounts)

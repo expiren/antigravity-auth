@@ -146,10 +146,16 @@ function buildModelBreakdown(accounts: AccountInfo[]): string[] {
       const group = acc.cachedQuota?.[key]
       if (!group || typeof group.remainingFraction !== 'number') continue
       if (group.remainingFraction <= 0) {
-        exhaustedCount++
+        // Skip stale exhaustion: if resetTime is missing or in the past,
+        // Google has likely already reset the quota — count as available
         const resetMs = parseResetTimeToMs(group.resetTime)
-        if (resetMs !== null && (maxResetMs === undefined || resetMs > maxResetMs)) {
-          maxResetMs = resetMs
+        if (resetMs !== null && resetMs > 0) {
+          exhaustedCount++
+          if (maxResetMs === undefined || resetMs > maxResetMs) {
+            maxResetMs = resetMs
+          }
+        } else {
+          availableCount++
         }
       } else {
         availableCount++
