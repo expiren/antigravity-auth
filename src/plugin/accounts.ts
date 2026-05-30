@@ -153,10 +153,15 @@ export interface ManagedAccount {
   verificationRequiredAt?: number;
   verificationRequiredReason?: string;
   verificationUrl?: string;
+  /** Daily request counts per model family */
+  dailyRequestCounts?: {
+    date: string
+    claude: number
+    gemini: number
+  }
 }
 
-function nowMs(): number {
-  return Date.now();
+function nowMs(): number {  return Date.now();
 }
 
 function clampNonNegativeInt(value: unknown, fallback: number): number {
@@ -363,8 +368,8 @@ export class AccountManager {
             fingerprintHistory: acc.fingerprintHistory ?? [],
             cachedQuota: acc.cachedQuota as Partial<Record<QuotaGroup, QuotaGroupSummary>> | undefined,
             cachedQuotaUpdatedAt: acc.cachedQuotaUpdatedAt,
-            verificationRequired: acc.verificationRequired,
-            verificationRequiredAt: acc.verificationRequiredAt,
+            dailyRequestCounts: acc.dailyRequestCounts,
+            verificationRequired: acc.verificationRequired,            verificationRequiredAt: acc.verificationRequiredAt,
             verificationRequiredReason: acc.verificationRequiredReason,
             verificationUrl: acc.verificationUrl,
           };
@@ -1007,12 +1012,12 @@ export class AccountManager {
         fingerprintHistory: a.fingerprintHistory?.length ? a.fingerprintHistory : undefined,
         cachedQuota: a.cachedQuota && Object.keys(a.cachedQuota).length > 0 ? a.cachedQuota : undefined,
         cachedQuotaUpdatedAt: a.cachedQuotaUpdatedAt,
+        dailyRequestCounts: a.dailyRequestCounts,
         verificationRequired: a.verificationRequired,
         verificationRequiredAt: a.verificationRequiredAt,
         verificationRequiredReason: a.verificationRequiredReason,
         verificationUrl: a.verificationUrl,
-      })),
-      activeIndex: claudeIndex,
+      })),      activeIndex: claudeIndex,
       activeIndexByFamily: {
         claude: claudeIndex,
         gemini: geminiIndex,
@@ -1161,6 +1166,70 @@ export class AccountManager {
     }
   }
 
+  /**
+   * Record a successful API request for an account.
+   * Tracks per model family with daily reset.
+   */
+  recordRequest(accountIndex: number, family: ModelFamily): void {
+    const account = this.accounts[accountIndex]
+    if (!account) return
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    if (!account.dailyRequestCounts || account.dailyRequestCounts.date !== today) {
+      account.dailyRequestCounts = { date: today, claude: 0, gemini: 0 }
+    }
+
+    account.dailyRequestCounts[family]++
+    account.lastUsed = nowMs()
+  }
+
+  /**
+   * Get request counts for an account for today.
+   */
+  getDailyRequestCounts(accountIndex: number): { date: string, claude: number, gemini: number } | null {
+    const account = this.accounts[accountIndex]
+    if (!account?.dailyRequestCounts) return null
+
+    const today = new Date().toISOString().slice(0, 10)
+    if (account.dailyRequestCounts.date !== today) return null
+
+    return { ...account.dailyRequestCounts }
+  }
+
+  /**
+   * Get total daily request counts across all accounts for a model family.
+   */
+  getTotalDailyRequests(family: ModelFamily): number {
+    const today = new Date().toISOString().slice(0, 10)
+    let total = 0
+    for (const account of this.accounts) {
+      if (account.dailyRequestCounts?.date === today) {
+        total += account.dailyRequestCounts[family]
+      }
+    }
+    return total
+  }
+
+  /**
+   * Get a summary of daily request distribution across accounts.
+   * Returns accounts sorted by request count (descending).
+   */
+  getDailyRequestSummary(family: ModelFamily): Array<{ index: number, email?: string, count: number }> {
+    const today = new Date().toISOString().slice(0, 10)
+    const result: Array<{ index: number, email?: string, count: number }> = []
+
+    for (const account of this.accounts) {
+      const count = account.dailyRequestCounts?.date === today
+        ? account.dailyRequestCounts[family]
+        : 0
+      if (count > 0) {
+        result.push({ index: account.index, email: account.email, count })
+      }
+    }
+
+    return result.sort((a, b) => b.count - a.count)
+  }
   isAccountOverSoftQuota(account: ManagedAccount, family: ModelFamily, thresholdPercent: number, cacheTtlMs: number, model?: string | null): boolean {
     return isOverSoftQuotaThreshold(account, family, thresholdPercent, cacheTtlMs, model);
   }

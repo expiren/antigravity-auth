@@ -218,6 +218,12 @@ export interface AccountMetadataV3 {
   /** Cached per-model quota data (individual model granularity) */
   cachedPerModelQuota?: { modelId: string; displayName?: string; group: string | null; remainingFraction: number; resetTime?: string }[];
   cachedQuotaUpdatedAt?: number;
+  /** Daily request counts per model family, resets when date changes */
+  dailyRequestCounts?: {
+    date: string  // ISO date string YYYY-MM-DD
+    claude: number
+    gemini: number
+  }
 }
 export interface AccountStorageV3 {
   version: 3;

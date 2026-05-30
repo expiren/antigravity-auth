@@ -2073,9 +2073,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 const response = await fetch(prepared.request, prepared.init);
                 apiRequestCount++;
+                accountManager.recordRequest(account.index, family)
+                const requestCounts = accountManager.getDailyRequestCounts(account.index)
+                if (requestCounts) {
+                  pushDebug(`[Quota] account=${account.index} ${family}_today=${requestCounts[family]} total_${family}_today=${accountManager.getTotalDailyRequests(family)}`)
+                }
                 pushDebug(`status=${response.status} ${response.statusText} (api_request #${apiRequestCount})`);
-
-
 
                 // Handle 429 rate limit (or Service Overloaded) with improved logic
                 if (response.status === 429 || response.status === 503 || response.status === 529) {
@@ -2446,6 +2449,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 if (apiRequestCount > 1) {
                   pushDebug(`[Quota] Total API requests for this user message: ${apiRequestCount} (${apiRequestCount - 1} retries)`);
                 }
+                const dailyCounts = accountManager.getDailyRequestCounts(account.index)
+                if (dailyCounts) {
+                  pushDebug(`[Quota] Account ${account.index} (${account.email ?? "unknown"}) today: claude=${dailyCounts.claude} gemini=${dailyCounts.gemini}`)
+                }
+                const totalToday = accountManager.getTotalDailyRequests(family)
+                pushDebug(`[Quota] Total ${family} requests today (all accounts): ${totalToday}`)
 
                 return transformedResponse;
               } catch (error) {
