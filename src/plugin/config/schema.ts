@@ -447,11 +447,23 @@ export const AntigravityConfigSchema = z.object({
      z.literal("auto"),
      z.number().min(1).max(120)
    ]).default("auto"),
+
+   /**
+    * Proactive rotation threshold percentage (0-100).
+    * After a successful request, if the current account's remaining quota
+    * drops below this percentage, proactively switch to a warm-cache account
+    * before the next request — avoiding a forced 429 mid-conversation.
+    *
+    * Set to 0 to disable proactive rotation.
+    *
+    * @default 20
+    * @env OPENCODE_ANTIGRAVITY_PROACTIVE_ROTATION_THRESHOLD
+    */
+   proactive_rotation_threshold_percent: z.number().min(0).max(100).default(20),
    
    // =========================================================================
    // Health Score (used by hybrid strategy)
-   // =========================================================================
-   
+   // =========================================================================   
    health_score: z.object({
      initial: z.number().min(0).max(100).default(70),
      success_reward: z.number().min(0).max(10).default(1),
@@ -524,8 +536,8 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   soft_quota_threshold_percent: 90,
   quota_refresh_interval_minutes: 30,
   soft_quota_cache_ttl_minutes: "auto",
-  auto_update: true,
-  signature_cache: {
+  proactive_rotation_threshold_percent: 20,
+  auto_update: true,  signature_cache: {
     enabled: true,
     memory_ttl_seconds: 3600,
     disk_ttl_seconds: 172800,

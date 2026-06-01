@@ -648,8 +648,71 @@ export class AccountManager {
   wasUsedInSession(accountIndex: number): boolean {
     return this.sessionUsedAccounts.has(accountIndex);
   }
-  markRateLimitedWithReason(
-    account: ManagedAccount,
+
+  shouldProactivelyRotate(
+    family: ModelFamily,
+    model: string | null | undefined,
+    thresholdPercent: number,
+    cacheTtlMs: number,
+  ): boolean {
+    if (thresholdPercent <= 0) return false;
+
+    const current = this.getCurrentAccountForFamily(family);
+    if (!current || !current.cachedQuota || current.cachedQuotaUpdatedAt == null) return false;
+
+    const age = nowMs() - current.cachedQuotaUpdatedAt;
+    if (age > cacheTtlMs) return false;
+
+    const quotaGroup = resolveQuotaGroup(family, model);
+    const groupData = current.cachedQuota[quotaGroup];
+    if (groupData?.remainingFraction == null) return false;
+
+    const remainingPercent = Math.max(0, Math.min(100, groupData.remainingFraction * 100));
+    return remainingPercent < thresholdPercent;
+  }
+
+  proactivelyRotateForFamily(
+    family: ModelFamily,
+    model: string | null | undefined,
+    headerStyle: HeaderStyle,
+    softQuotaThresholdPercent: number,
+    softQuotaCacheTtlMs: number,
+  ): ManagedAccount | null {
+    const currentIndex = this.currentAccountIndexByFamily[family];
+
+    const candidates = this.accounts.filter(acc => {
+      if (acc.enabled === false) return false;
+      if (acc.index === currentIndex) return false;
+      clearExpiredRateLimits(acc);
+      if (isRateLimitedForHeaderStyle(acc, family, headerStyle, model)) return false;
+      if (isOverSoftQuotaThreshold(acc, family, softQuotaThresholdPercent, softQuotaCacheTtlMs, model)) return false;
+      if (this.isAccountCoolingDown(acc)) return false;
+      return true;
+    });
+
+    if (candidates.length === 0) return null;
+
+    const warmCandidates = candidates.filter(a => this.sessionUsedAccounts.has(a.index));
+    const pool = warmCandidates.length > 0 ? warmCandidates : candidates;
+
+    const quotaGroup = resolveQuotaGroup(family, model);
+    pool.sort((a, b) => {
+      const aRemaining = a.cachedQuota?.[quotaGroup]?.remainingFraction ?? 0;
+      const bRemaining = b.cachedQuota?.[quotaGroup]?.remainingFraction ?? 0;
+      return bRemaining - aRemaining;
+    });
+
+    const selected = pool[0];
+    if (!selected) return null;
+
+    const quotaKey = getQuotaKey(family, headerStyle, model);
+    this.markTouchedForQuota(selected, quotaKey);
+    this.currentAccountIndexByFamily[family] = selected.index;
+
+    return selected;
+  }
+
+  markRateLimitedWithReason(    account: ManagedAccount,
     family: ModelFamily,
     headerStyle: HeaderStyle,
     model: string | null | undefined,

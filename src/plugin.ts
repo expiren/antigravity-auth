@@ -40,7 +40,7 @@ import { EmptyResponseError } from "./plugin/errors";
 import { AntigravityTokenRefreshError, refreshAccessToken } from "./plugin/token";
 import { startOAuthListener, type OAuthListener } from "./plugin/server";
 import { clearAccounts, loadAccounts, saveAccounts, saveAccountsReplace } from "./plugin/storage";
-import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs } from "./plugin/accounts";
+import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs, resolveQuotaGroup } from "./plugin/accounts";
 import { createAutoUpdateCheckerHook } from "./hooks/auto-update-checker";
 import { buildAuthFromStoredAccount, detectAuthStorageDrift } from "./plugin/auth-drift";
 import { createAuthDoctorReport, formatAuthDoctorReport } from "./plugin/auth-doctor";
@@ -2420,8 +2420,31 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     providerId,
                     config.quota_refresh_interval_minutes,
                   );
-                }
-                logAntigravityDebugResponse(debugContext, response, {
+
+                  // Proactive rotation: if current account quota is low, pre-switch
+                  // to a warm-cache account so the NEXT request avoids a cold cache miss
+                  const proactiveThreshold = config.proactive_rotation_threshold_percent ?? 20;
+                  if (proactiveThreshold > 0 && accountManager.shouldProactivelyRotate(
+                    family,
+                    model,
+                    proactiveThreshold,
+                    softQuotaCacheTtlMs,
+                  )) {
+                    const rotated = accountManager.proactivelyRotateForFamily(
+                      family,
+                      model,
+                      headerStyle,
+                      config.soft_quota_threshold_percent,
+                      softQuotaCacheTtlMs,
+                    );
+                    if (rotated) {
+                      const remaining = account.cachedQuota?.[resolveQuotaGroup(family, model)]?.remainingFraction;
+                      const remainingPct = remaining != null ? `${(remaining * 100).toFixed(1)}%` : "?";
+                      pushDebug(`[ProactiveRotation] account ${account.index} quota ${remainingPct} < ${proactiveThreshold}%, pre-switched to account ${rotated.index} for next request`);
+                      pushDebug(`[ProactiveRotation] ${account.index} → ${rotated.index} (warm=${accountManager.wasUsedInSession(rotated.index)})`);
+                    }
+                  }
+                }                logAntigravityDebugResponse(debugContext, response, {
                   note: response.ok ? "Success" : `Error ${response.status}`,
                 });
                 if (response.ok && !prepared.streaming) {
