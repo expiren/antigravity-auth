@@ -1951,28 +1951,16 @@ export const createAntigravityPlugin = (providerId: string) => async (
               try {
                 pushDebug("cache-warmup-probe: start");
 
-                // Strip output-related config from probe body — cache warming only needs
-                // the input prefix to match the server-side cache key.
-                // The cache key includes: systemInstruction + tools + contents.
-                // Only strip generation/output config that doesn't affect the key.
-                let probeBody = bodyStr;
-                try {
-                  const parsed = JSON.parse(bodyStr) as Record<string, unknown>;
-                  if (parsed.request && typeof parsed.request === "object") {
-                    const req = { ...(parsed.request as Record<string, unknown>) };
-                    delete req.generationConfig;
-                    delete req.thinkingConfig;
-                    delete req.safetySettings;
-                    probeBody = JSON.stringify({ ...parsed, request: req });
-                  }
-                } catch {
-                  // If parse fails, use original body
-                }
-
+                // Send the exact same body as the real request — the server-side cache
+                // key includes the full request payload (systemInstruction, tools,
+                // generationConfig, thinkingConfig, contents). Stripping any field
+                // produces a different hash → cache MISS on the first real request.
+                // The probe aborts after the first SSE chunk, so output generation
+                // cost is negligible regardless of maxOutputTokens settings.
                 const probeResponse = await fetch(toUrlString(prepared.request), {
                   ...prepared.init,
                   method: "POST",
-                  body: probeBody,
+                  body: bodyStr,
                 });
 
                 if (probeResponse.body) {
