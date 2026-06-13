@@ -55,8 +55,8 @@ pushes. The `Release` workflow then publishes all three packages to npm via
 trusted publishing.
 
 ```bash
-./scripts/release.sh 1.7.0          # release
-./scripts/release.sh 1.7.0 --dry    # preview
+./scripts/release.sh 1.0.0          # release
+./scripts/release.sh 1.0.0 --dry    # preview
 ```
 
 ## License
