@@ -69,6 +69,22 @@ interface GeminiStreamChunk {
   usageMetadata?: GeminiUsageMetadata
 }
 
+/**
+ * Antigravity wraps each streamGenerateContent SSE chunk under a `response`
+ * key: `data: {"response": {"candidates": [...], "usageMetadata": {...}}}`.
+ * Unwrap it so downstream sees the plain Gemini chunk. MITM-verified against
+ * agy 1.0.4 on 2026-06-13.
+ */
+function unwrapChunk(raw: unknown): GeminiStreamChunk {
+  if (raw && typeof raw === "object" && "response" in raw) {
+    const inner = (raw as { response?: unknown }).response
+    if (inner && typeof inner === "object") {
+      return inner as GeminiStreamChunk
+    }
+  }
+  return raw as GeminiStreamChunk
+}
+
 interface GeminiResponsePart {
   text?: string
   thought?: boolean
@@ -95,27 +111,37 @@ export async function* parseGeminiSse(response: Response): AsyncGenerator<Gemini
   const decoder = new TextDecoder()
   let buffer = ""
 
+  const parseFrame = function* (frame: string): Generator<GeminiStreamChunk> {
+    for (const line of frame.split("\n")) {
+      if (!line.startsWith("data:")) continue
+      const data = line.slice(5).trim()
+      if (!data || data === "[DONE]") continue
+      try {
+        yield unwrapChunk(JSON.parse(data))
+      } catch {
+        // Ignore malformed SSE frames.
+      }
+    }
+  }
+
   try {
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      // Antigravity uses CRLF line endings (`\r\n\r\n` frame separators);
+      // normalize so a single boundary check works for both LF and CRLF.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n")
       let boundary = buffer.indexOf("\n\n")
       while (boundary !== -1) {
         const frame = buffer.slice(0, boundary)
         buffer = buffer.slice(boundary + 2)
         boundary = buffer.indexOf("\n\n")
-        for (const line of frame.split("\n")) {
-          if (!line.startsWith("data:")) continue
-          const data = line.slice(5).trim()
-          if (!data || data === "[DONE]") continue
-          try {
-            yield JSON.parse(data) as GeminiStreamChunk
-          } catch {
-            // Ignore malformed SSE frames.
-          }
-        }
+        yield* parseFrame(frame)
       }
+    }
+    // Flush any trailing frame that did not end with a blank-line separator.
+    if (buffer.trim()) {
+      yield* parseFrame(buffer)
     }
   } finally {
     reader.releaseLock()
@@ -221,6 +247,7 @@ export function streamCortexKitAntigravity(
 
       const content = output.content as Array<TextContent | ToolCall>
       let textIndex = -1
+      let finished = false
 
       for await (const chunk of parseGeminiSse(response)) {
         updateUsage(model, output, chunk.usageMetadata)
@@ -273,7 +300,16 @@ export function streamCortexKitAntigravity(
           if (output.stopReason !== "toolUse") {
             output.stopReason = mapFinishReason(candidate.finishReason)
           }
+          // The AGY raw-socket transport may keep the response body open after
+          // the terminal chunk, which would hang the SSE reader. Stop consuming
+          // once a finishReason arrives so the turn terminates promptly.
+          finished = true
+          break
         }
+      }
+
+      if (finished) {
+        await response.body?.cancel().catch(() => {})
       }
 
       if (options?.signal?.aborted) throw new Error("Request was aborted")

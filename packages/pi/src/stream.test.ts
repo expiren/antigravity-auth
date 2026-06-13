@@ -16,10 +16,11 @@ function sseResponse(frames: string[]): Response {
 }
 
 describe("parseGeminiSse", () => {
-  it("parses complete SSE frames into chunks", async () => {
+  it("parses and unwraps the Antigravity response envelope into chunks", async () => {
+    // Antigravity wraps each chunk under a `response` key (MITM-verified).
     const response = sseResponse([
-      'data: {"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}\n\n',
-      'data: {"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"candidatesTokenCount":3}}\n\n',
+      'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"hi"}]}}]}}\n\n',
+      'data: {"response":{"candidates":[{"finishReason":"STOP"}],"usageMetadata":{"candidatesTokenCount":3}}}\n\n',
     ])
 
     const chunks = []
@@ -35,8 +36,8 @@ describe("parseGeminiSse", () => {
 
   it("handles frames split across read boundaries", async () => {
     const response = sseResponse([
-      'data: {"candidates":[{"content":{"rol',
-      'e":"model","parts":[{"text":"split"}]}}]}\n\n',
+      'data: {"response":{"candidates":[{"content":{"rol',
+      'e":"model","parts":[{"text":"split"}]}}]}}\n\n',
     ])
 
     const chunks = []
@@ -52,7 +53,7 @@ describe("parseGeminiSse", () => {
     const response = sseResponse([
       "data: [DONE]\n\n",
       "data: not-json\n\n",
-      'data: {"candidates":[{"finishReason":"STOP"}]}\n\n',
+      'data: {"response":{"candidates":[{"finishReason":"STOP"}]}}\n\n',
     ])
 
     const chunks = []
@@ -62,6 +63,37 @@ describe("parseGeminiSse", () => {
 
     expect(chunks).toHaveLength(1)
     expect(chunks[0]?.candidates?.[0]?.finishReason).toBe("STOP")
+  })
+
+  it("parses CRLF-separated frames (Antigravity wire format)", async () => {
+    // Antigravity separates frames with \r\n\r\n, which contains no \n\n.
+    const response = sseResponse([
+      'data: {"response":{"candidates":[{"content":{"role":"model","parts":[{"text":"crlf"}]}}]}}\r\n\r\n',
+      'data: {"response":{"candidates":[{"finishReason":"STOP"}]}}\r\n\r\n',
+    ])
+
+    const chunks = []
+    for await (const chunk of parseGeminiSse(response)) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]?.candidates?.[0]?.content?.parts?.[0]).toEqual({ text: "crlf" })
+    expect(chunks[1]?.candidates?.[0]?.finishReason).toBe("STOP")
+  })
+
+  it("flushes a trailing frame without a blank-line separator", async () => {
+    const response = sseResponse([
+      'data: {"response":{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"tail"}]}}]}}',
+    ])
+
+    const chunks = []
+    for await (const chunk of parseGeminiSse(response)) {
+      chunks.push(chunk)
+    }
+
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]?.candidates?.[0]?.content?.parts?.[0]).toEqual({ text: "tail" })
   })
 
   it("returns nothing for an empty body", async () => {
