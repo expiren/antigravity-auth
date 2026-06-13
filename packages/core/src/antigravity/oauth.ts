@@ -56,6 +56,52 @@ export type AntigravityTokenExchangeResult =
   | AntigravityTokenExchangeSuccess
   | AntigravityTokenExchangeFailure;
 
+export interface AntigravityRefreshResult {
+  access: string;
+  refresh: string;
+  expires: number;
+}
+
+/**
+ * Refresh an Antigravity OAuth access token using a bare refresh token.
+ * Harness-agnostic: performs only the token POST and returns the new
+ * credentials. Persistence/caching is the caller's responsibility.
+ */
+export async function refreshAntigravityToken(
+  refreshToken: string,
+): Promise<AntigravityRefreshResult> {
+  const startTime = Date.now();
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: ANTIGRAVITY_CLIENT_ID,
+      client_secret: ANTIGRAVITY_CLIENT_SECRET,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(
+      `Antigravity token refresh failed (${response.status} ${response.statusText})${errorText ? ` - ${errorText}` : ""}`,
+    );
+  }
+
+  const payload = (await response.json()) as {
+    access_token: string;
+    expires_in: number;
+    refresh_token?: string;
+  };
+
+  return {
+    access: payload.access_token,
+    refresh: payload.refresh_token ?? refreshToken,
+    expires: calculateTokenExpiry(startTime, payload.expires_in),
+  };
+}
+
 interface AntigravityTokenResponse {
   access_token: string;
   expires_in: number;
