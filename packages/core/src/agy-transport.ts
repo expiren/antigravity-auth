@@ -8,6 +8,10 @@ const DEFAULT_HTTPS_PORT = 443
 const DEFAULT_PROXY_PORT = 8080
 
 export const DEFAULT_AGY_RESPONSE_HEADER_TIMEOUT_MS = 180_000
+// Max time the response body may stall (no bytes received) before the socket is
+// destroyed. Streaming responses emit data far more frequently than this; a
+// truly hung body would otherwise hold the socket open indefinitely.
+export const DEFAULT_AGY_IDLE_TIMEOUT_MS = 180_000
 
 export type AgyTransportOptions = {
   /**
@@ -15,6 +19,12 @@ export type AgyTransportOptions = {
    * The response body/stream is not bounded by this timeout.
    */
   timeoutMs?: number
+  /**
+   * Maximum time the response body may stall (no bytes) before the socket is
+   * destroyed. Resets on every received chunk. Defaults to
+   * DEFAULT_AGY_IDLE_TIMEOUT_MS.
+   */
+  idleTimeoutMs?: number
   signal?: AbortSignal | null
   onDebug?: (message: string) => void
 }
@@ -27,6 +37,7 @@ type ParsedResponseHead = {
   headers: Headers
   chunked: boolean
   gzip: boolean
+  contentLength?: number
 }
 
 function headersToRecord(headers?: HeadersInit): Record<string, string> {
@@ -271,6 +282,7 @@ function parseResponseHead(head: string): ParsedResponseHead {
   const headers = new Headers()
   let chunked = false
   let gzip = false
+  let contentLength: number | undefined
   for (const line of lines) {
     const index = line.indexOf(":")
     if (index <= 0) continue
@@ -286,8 +298,14 @@ function parseResponseHead(head: string): ParsedResponseHead {
       gzip = true
       continue
     }
-    if (gzip && lowerKey === "content-length") {
-      continue
+    if (lowerKey === "content-length") {
+      const parsed = Number.parseInt(value, 10)
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        contentLength = parsed
+      }
+      // Drop content-length from the surfaced headers when gzip is set, since
+      // the decoded body length differs from the wire length.
+      if (gzip) continue
     }
     headers.append(key, value)
   }
@@ -298,6 +316,36 @@ function parseResponseHead(head: string): ParsedResponseHead {
     headers,
     chunked,
     gzip,
+    contentLength,
+  }
+}
+
+export class ContentLengthStream extends Transform {
+  private remaining: number
+
+  constructor(contentLength: number) {
+    super()
+    this.remaining = contentLength
+  }
+
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error | null) => void): void {
+    if (this.remaining <= 0) {
+      callback()
+      return
+    }
+    if (chunk.length <= this.remaining) {
+      this.remaining -= chunk.length
+      this.push(chunk)
+    } else {
+      // Emit only up to the declared length; discard any trailing bytes that
+      // belong to the next keep-alive response.
+      this.push(chunk.subarray(0, this.remaining))
+      this.remaining = 0
+    }
+    if (this.remaining <= 0) {
+      this.push(null)
+    }
+    callback()
   }
 }
 
@@ -353,6 +401,8 @@ function buildResponseStream(
   leftover: Buffer,
   head: ParsedResponseHead,
   signal?: AbortSignal | null,
+  idleTimeoutMs?: number,
+  onDebug?: (message: string) => void,
 ): ReadableStream<Uint8Array> {
   const source = new PassThrough()
   if (leftover.length > 0) {
@@ -363,13 +413,42 @@ function buildResponseStream(
   let responseBody: Readable = source
   if (head.chunked) {
     responseBody = responseBody.pipe(new ChunkedDecodeStream())
+  } else if (typeof head.contentLength === "number") {
+    // Non-chunked with a known length: emit exactly contentLength bytes then
+    // end, rather than reading until socket EOF (which over-reads on keep-alive
+    // connections and never ends if the server keeps the socket open).
+    responseBody = responseBody.pipe(new ContentLengthStream(head.contentLength))
   }
   if (head.gzip) {
     responseBody = responseBody.pipe(createGunzip())
   }
 
+  // Idle-read watchdog: if no body bytes arrive within idleTimeoutMs, destroy
+  // the socket so a hung/stalled response can't hold the connection forever.
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  const clearIdle = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer)
+      idleTimer = undefined
+    }
+  }
+  const armIdle = () => {
+    if (!idleTimeoutMs || idleTimeoutMs <= 0) return
+    clearIdle()
+    idleTimer = setTimeout(() => {
+      onDebug?.(`agy transport idle timeout after ${idleTimeoutMs}ms with no body data`)
+      socket.destroy(new Error(`Antigravity response stalled: no data for ${idleTimeoutMs}ms`))
+    }, idleTimeoutMs)
+  }
+  socket.on("data", armIdle)
+  armIdle()
+
   const abort = () => socket.destroy(new DOMException("The operation was aborted", "AbortError"))
-  const cleanup = () => signal?.removeEventListener("abort", abort)
+  const cleanup = () => {
+    clearIdle()
+    socket.off("data", armIdle)
+    signal?.removeEventListener("abort", abort)
+  }
   if (signal?.aborted) {
     abort()
   } else {
@@ -398,11 +477,18 @@ export async function fetchWithAgyCliTransport(
     throw new Error(`agy transport only supports https URLs: ${url}`)
   }
 
+  if (options.signal?.aborted) {
+    throw new DOMException("The operation was aborted", "AbortError")
+  }
+
   const body = bodyToBuffer(init.body)
   const requestBytes = serializeRequest(parsedUrl, init, body)
   const timeoutMs = options.timeoutMs ?? DEFAULT_AGY_RESPONSE_HEADER_TIMEOUT_MS
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_AGY_IDLE_TIMEOUT_MS
   options.onDebug?.(`agy transport connecting to ${parsedUrl.hostname} with header timeout ${timeoutMs}ms`)
-  const socket = await connectTls(parsedUrl, timeoutMs, options.onDebug)
+  // Race the connect against abort so a cancel during TLS/proxy connect is
+  // honored immediately instead of waiting out the connect timeout.
+  const socket = await connectTlsWithAbort(parsedUrl, timeoutMs, options.signal, options.onDebug)
 
   const abort = () => {
     socket.destroy(new DOMException("The operation was aborted", "AbortError"))
@@ -419,7 +505,7 @@ export async function fetchWithAgyCliTransport(
     })
     const parsedHead = parseResponseHead(head)
     options.onDebug?.(`agy transport response headers received: ${parsedHead.status} ${parsedHead.statusText}`)
-    const bodyStream = buildResponseStream(socket, leftover, parsedHead, options.signal)
+    const bodyStream = buildResponseStream(socket, leftover, parsedHead, options.signal, idleTimeoutMs, options.onDebug)
     return new Response(bodyStream, {
       status: parsedHead.status,
       statusText: parsedHead.statusText,
@@ -430,5 +516,31 @@ export async function fetchWithAgyCliTransport(
     throw error
   } finally {
     options.signal?.removeEventListener("abort", abort)
+  }
+}
+
+async function connectTlsWithAbort(
+  targetUrl: URL,
+  timeoutMs: number,
+  signal: AbortSignal | null | undefined,
+  onDebug?: (message: string) => void,
+): Promise<tls.TLSSocket> {
+  if (!signal) {
+    return connectTls(targetUrl, timeoutMs, onDebug)
+  }
+  const connectPromise = connectTls(targetUrl, timeoutMs, onDebug)
+  let onAbort: (() => void) | undefined
+  const abortPromise = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new DOMException("The operation was aborted", "AbortError"))
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([connectPromise, abortPromise])
+  } catch (error) {
+    // If abort won the race, make sure the in-flight socket is torn down once it resolves.
+    void connectPromise.then((socket) => socket.destroy()).catch(() => {})
+    throw error
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort)
   }
 }
