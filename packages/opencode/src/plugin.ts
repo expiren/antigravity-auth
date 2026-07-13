@@ -33,6 +33,7 @@ import {
   isGenerativeLanguageRequest,
   prepareAntigravityRequest,
   transformAntigravityResponse,
+  initSessionId,
 } from "./plugin/request";
 import { resolveModelWithTier } from "./plugin/transform/model-resolver";
 import {
@@ -65,7 +66,7 @@ import {
   parseGeminiDumpCommandAction,
   setGeminiDumpEnabled,
 } from "./plugin/gemini-dump";
-import { getAntigravityOpencodeModelIds, OPENCODE_MODEL_DEFINITIONS } from "./plugin/model-registry";
+import { OPENCODE_MODEL_DEFINITIONS } from "./plugin/model-registry";
 import type {
   GetAuth,
   LoaderResult,
@@ -80,16 +81,11 @@ const MAX_OAUTH_ACCOUNTS = 10;
 const MAX_WARMUP_SESSIONS = 1000;
 const MAX_WARMUP_RETRIES = 2;
 const MAX_TOTAL_CAPACITY_RETRIES = 4;
-const CAPACITY_BACKOFF_TIERS_MS = [5000, 10000, 20000, 30000, 60000];
 
 function isCapacityRetryBudgetExhausted(totalCapacityRetries: number): boolean {
   return totalCapacityRetries >= MAX_TOTAL_CAPACITY_RETRIES;
 }
 
-function getCapacityBackoffDelay(consecutiveFailures: number): number {
-  const index = Math.min(consecutiveFailures, CAPACITY_BACKOFF_TIERS_MS.length - 1);
-  return CAPACITY_BACKOFF_TIERS_MS[Math.max(0, index)] ?? 5000;
-}
 const warmupAttemptedSessionIds = new Set<string>();
 const warmupSucceededSessionIds = new Set<string>();
 
@@ -1165,17 +1161,6 @@ function resetRateLimitState(accountIndex: number, quotaKey: string): void {
   rateLimitStateByAccountQuota.delete(stateKey);
 }
 
-/**
- * Reset all rate limit state for an account (all quotas).
- * Used when account is completely healthy.
- */
-function resetAllRateLimitStateForAccount(accountIndex: number): void {
-  for (const key of rateLimitStateByAccountQuota.keys()) {
-    if (key.startsWith(`${accountIndex}:`)) {
-      rateLimitStateByAccountQuota.delete(key);
-    }
-  }
-}
 
 function headerStyleToQuotaKey(headerStyle: HeaderStyle, family: ModelFamily): string {
   if (family === "claude") return "claude";
@@ -1287,6 +1272,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
   // Load configuration from files and environment variables
   const config = loadConfig(directory);
   initRuntimeConfig(config);
+  initSessionId(directory);
 
   // Cached getAuth function for tool access
   let cachedGetAuth: GetAuth | null = null;
@@ -1464,7 +1450,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
   return {
     config: async (opencodeConfig: Record<string, unknown>) => {
-      applyAntigravityProviderCatalog(opencodeConfig, providerId);
+      applyAntigravityProviderCatalog(opencodeConfig, providerId, config);
       const mutableConfig = opencodeConfig as Record<string, unknown> & {
         command?: Record<string, unknown>;
       };
@@ -1627,7 +1613,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
           if (accountManager.getAccountCount() === 0) {
             return createSyntheticErrorResponse(
-              "No Antigravity accounts configured. Run `opencode auth login`.",
+              "[Antigravity Error] No Antigravity accounts configured. Run `opencode auth login`.",
               "unknown",
             );
           }
@@ -1731,7 +1717,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             
             if (accountCount === 0) {
               return createSyntheticErrorResponse(
-                "No Antigravity accounts available. Run `opencode auth login`.",
+                "[Antigravity Error] No Antigravity accounts available. Run `opencode auth login`.",
                 model ?? "unknown",
               );
             }
@@ -1783,7 +1769,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     "error"
                   );
                   return createSyntheticErrorResponse(
-                    `Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. ` +
+                    `[Antigravity Error] Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. ` +
                     `Quota resets in ${waitTimeFormatted}. ` +
                     `Add more accounts, wait for quota reset, or set soft_quota_threshold_percent: 100 to disable.`,
                     model ?? "unknown",
@@ -1834,7 +1820,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 
                 // Return a proper rate limit error response
                 return createSyntheticErrorResponse(
-                  `All ${accountCount} account(s) rate-limited for ${family}. ` +
+                  `[Antigravity Error] All ${accountCount} account(s) rate-limited for ${family}. ` +
                   `Quota resets in ${waitTimeFormatted}. ` +
                   `Add more accounts with \`opencode auth login\` or wait and retry.`,
                   model ?? "unknown",
@@ -1938,7 +1924,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     }
 
                     return createSyntheticErrorResponse(
-                      "All Antigravity accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
+                      "[Antigravity Error] All Antigravity accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
                       model ?? "unknown",
                     );
                   }
@@ -1964,7 +1950,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               lastError = new Error("Missing access token");
               if (accountCount <= 1) {
                 return createSyntheticErrorResponse(
-                  "Missing access token. Run `opencode auth login` to reauthenticate.",
+                  "[Antigravity Error] Missing access token. Run `opencode auth login` to reauthenticate.",
                   model ?? "unknown",
                 );
               }
@@ -2558,6 +2544,35 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     shouldSwitchAccount = true;
                     break;
                   }
+
+                  // Check for "not eligible" 403 — permanently disable account
+                  const lowerBody = errorBodyText.toLowerCase();
+                  const isIneligible = (
+                    lowerBody.includes("not eligible") ||
+                    lowerBody.includes("ineligible") ||
+                    lowerBody.includes("not available for your account") ||
+                    lowerBody.includes("access denied")
+                  );
+
+                  if (isIneligible) {
+                    const ineligibleLabel = account.email || `Account ${account.index + 1}`;
+                    accountManager.markAccountIneligible(account.index, errorBodyText.slice(0, 200));
+
+                    if (accountManager.shouldShowAccountToast(account.index, 60000)) {
+                      await showToast(
+                        `🚫 ${ineligibleLabel} is not eligible for Antigravity. Permanently disabled.`,
+                        "warning",
+                      );
+                      accountManager.markToastShown(account.index);
+                    }
+
+                    pushDebug(`ineligible: permanently disabled account ${account.index}`);
+                    getHealthTracker().recordFailure(account.index);
+
+                    lastFailure = createFailureContext(response);
+                    shouldSwitchAccount = true;
+                    break;
+                  }
                 }
 
                 const shouldRetryEndpoint = (
@@ -2664,7 +2679,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     // Clean up and return a synthetic response after max attempts
                     emptyResponseAttempts.delete(emptyAttemptKey);
                     return createSyntheticErrorResponse(
-                      `Empty response after ${currentAttempts} attempts for model ${prepared.effectiveModel ?? "unknown"}.`,
+                      `[Antigravity Error] Empty response after ${currentAttempts} attempts for model ${prepared.effectiveModel ?? "unknown"}.`,
                       prepared.effectiveModel ?? "unknown",
                     );
                   }
@@ -2816,7 +2831,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   );
                 }
                 return createSyntheticErrorResponse(
-                  lastError?.message || `Exceeded max account switches (${maxAccountSwitches}). All accounts rate-limited.`,
+                  `[Antigravity Error] ${lastError?.message || `Exceeded max account switches (${maxAccountSwitches}). All accounts rate-limited.`}`,
                   model ?? "unknown",
                 );
               }
@@ -2841,7 +2856,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 }
 
                 return createSyntheticErrorResponse(
-                  lastError?.message || "All Antigravity endpoints failed",
+                  `[Antigravity Error] ${lastError?.message || "All Antigravity endpoints failed"}`,
                   model ?? "unknown",
                 );
               }
@@ -2869,7 +2884,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
 
             return createSyntheticErrorResponse(
-              lastError?.message || "All Antigravity accounts failed",
+                  `[Antigravity Error] ${lastError?.message || "All Antigravity accounts failed"}`,
               model ?? "unknown",
             );
           }
@@ -3851,16 +3866,29 @@ type OpencodeMutableConfig = Record<string, unknown> & {
   }>;
 };
 
-function applyAntigravityProviderCatalog(config: Record<string, unknown>, providerId: string): void {
-  const mutableConfig = config as OpencodeMutableConfig;
+function applyAntigravityProviderCatalog(
+  opencodeConfig: Record<string, unknown>,
+  providerId: string,
+  pluginConfig: AntigravityConfig
+): void {
+  const mutableConfig = opencodeConfig as OpencodeMutableConfig;
   mutableConfig.provider ??= {};
 
   const providerConfig = mutableConfig.provider[providerId] ?? {};
+
+  // Merge order (lowest to highest priority):
+  // 1. Built-in defaults: OPENCODE_MODEL_DEFINITIONS
+  // 2. Decoupled models (from antigravity.json / antigravity-models.json): pluginConfig.models
+  // 3. User's main opencode.json models (preserves backwards compatibility / custom overrides)
   providerConfig.models = {
-    ...(providerConfig.models ?? {}),
     ...OPENCODE_MODEL_DEFINITIONS,
+    ...(pluginConfig.models ?? {}),
+    ...(providerConfig.models ?? {}),
   };
-  providerConfig.whitelist = getAntigravityOpencodeModelIds();
+
+  // Whitelist should be the union of all registered models so they aren't pruned by OpenCode
+  providerConfig.whitelist = Object.keys(providerConfig.models);
+
   mutableConfig.provider[providerId] = providerConfig;
 }
 

@@ -158,6 +158,10 @@ export interface ManagedAccount {
   verificationRequiredAt?: number;
   verificationRequiredReason?: string;
   verificationUrl?: string;
+  /** Account permanently ineligible for Antigravity */
+  ineligible?: boolean;
+  ineligibleAt?: number;
+  ineligibleReason?: string;
   /** Daily request counts per model family */
   dailyRequestCounts?: {
     date: string
@@ -954,6 +958,30 @@ export class AccountManager {
     }
 
     return true;
+  }
+
+  markAccountIneligible(accountIndex: number, reason?: string): boolean {
+    const account = this.accounts[accountIndex];
+    if (!account) {
+      return false;
+    }
+
+    account.ineligible = true;
+    account.ineligibleAt = nowMs();
+    account.ineligibleReason = reason?.trim() || undefined;
+
+    if (account.enabled !== false) {
+      this.setAccountEnabled(accountIndex, false);
+    } else {
+      this.requestSaveToDisk();
+    }
+
+    return true;
+  }
+
+  isAccountIneligible(accountIndex: number): boolean {
+    const account = this.accounts[accountIndex];
+    return account?.ineligible === true;
   }
 
   removeAccountByIndex(accountIndex: number): boolean {
