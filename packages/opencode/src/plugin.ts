@@ -31,7 +31,6 @@ import {
   buildThinkingWarmupBody,
   getLastCacheStats,
   isGenerativeLanguageRequest,
-  getImageModelLocalTitle,
   prepareAntigravityRequest,
   transformAntigravityResponse,
 } from "./plugin/request";
@@ -39,7 +38,6 @@ import { resolveModelWithTier } from "./plugin/transform/model-resolver";
 import {
   isEmptyResponseBody,
   createSyntheticErrorResponse,
-  createSyntheticTextResponse,
 } from "./plugin/request-helpers";
 import { AntigravityTokenRefreshError, refreshAccessToken } from "./plugin/token";
 import { startOAuthListener, type OAuthListener } from "./plugin/server";
@@ -1739,13 +1737,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
             }
           }
 
-          const localImageTitle = getImageModelLocalTitle(input, init)
-          if (localImageTitle !== undefined) {
-            return createSyntheticTextResponse(localImageTitle, {
-              "X-Antigravity-Response-Type": "local_title",
-            });
-          }
-
           const requestSessionIdentity = extractOpenCodeSessionIdentity(init?.headers);
           const agyRequestScope = agySessionRegistry.beginRequest(requestSessionIdentity);
           const agyRequestSession = agyRequestScope.session;
@@ -2915,7 +2906,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 // Post-request quota state: show cached remaining quota for this account
                 const cachedQuota = account.cachedQuota
                 if (cachedQuota) {
-                  const quotaFamily = resolveQuotaGroup(family, model)
+                  const quotaFamily = family === "claude" ? "claude" : "gemini-flash"
                   const groupQuota = cachedQuota[quotaFamily]
                   if (groupQuota?.remainingFraction != null) {
                     const pct = Math.round(groupQuota.remainingFraction * 100)
@@ -3269,7 +3260,6 @@ export const createAntigravityPlugin = (providerId: string) => async (
                         { name: "Claude", data: groups.claude },
                         { name: "Gemini 3 Pro", data: groups["gemini-pro"] },
                         { name: "Gemini 3 Flash", data: groups["gemini-flash"] },
-                        { name: "GPT-OSS", data: groups["gpt-oss"] },
                       ].filter(g => g.data);
                       
                       groupEntries.forEach((g, idx) => {

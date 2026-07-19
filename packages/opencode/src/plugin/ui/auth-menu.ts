@@ -125,7 +125,6 @@ const QUOTA_KEYS: { key: string; label: string }[] = [
   { key: 'claude', label: 'Claude' },
   { key: 'gemini-pro', label: 'Gemini Pro' },
   { key: 'gemini-flash', label: 'Gemini Flash' },
-  { key: 'gpt-oss', label: 'GPT-OSS' },
 ]
 
 function parseResetTimeToMs(resetTime?: string): number | null {
