@@ -1287,7 +1287,8 @@ it("removes x-api-key header", () => {
       const textSentinel = content.find((block) => block.text === "." && !block.type);
       expect(textSentinel).toBeTruthy();
       expect(JSON.stringify(content)).not.toContain(foreignSignature);
-      // With plain text sentinels, there's no signed thinking block → warmup is needed
+      // In Jun 14 code, warmup detection flag still computes true even though
+      // our antigravity gates skip the actual warmup/hint/recovery actions
       expect(result.needsSignedThinkingWarmup).toBe(true);    });
 
     it("returns requestedModel matching URL model", () => {

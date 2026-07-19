@@ -2203,6 +2203,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             
             // Track capacity retries per endpoint to prevent infinite loops
             let capacityRetryCount = 0;
+            let serverErrorRetryCount = 0;
             let lastEndpointIndex = -1;
             
             for (let i = 0; i < ANTIGRAVITY_ENDPOINT_FALLBACKS.length; i++) {              // Reset capacity retry counter when switching to a new endpoint
@@ -2570,6 +2571,26 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   await logResponseBody(debugContext, response, response.status);
                   lastFailure = createFailureContext(response);
                   continue;
+                }
+
+                // All endpoints exhausted with 500+ server error — retry on same account
+                // up to 2 times with 5s delay before rotating to another account
+                if (response.status >= 500 && i >= ANTIGRAVITY_ENDPOINT_FALLBACKS.length - 1) {
+                  await logResponseBody(debugContext, response, response.status);
+                  lastFailure = createFailureContext(response);
+                  if (serverErrorRetryCount < 2) {
+                    serverErrorRetryCount++;
+                    pushDebug(`Server error ${response.status} on account ${account.index}, retrying same account (attempt ${serverErrorRetryCount}/2) after 5s delay`);
+                    await new Promise(r => setTimeout(r, 5000));
+                    i = -1; // Reset endpoint loop to retry from first endpoint
+                    continue;
+                  }
+                  // Exhausted retries — rotate account
+                  serverErrorRetryCount = 0;
+                  pushDebug(`Server error persists after 2 retries on account ${account.index}, rotating`);
+                  getHealthTracker().recordFailure(account.index);
+                  shouldSwitchAccount = true;
+                  break;
                 }
 
                 // Success or non-retryable error - return the response

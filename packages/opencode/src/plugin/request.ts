@@ -1493,7 +1493,7 @@ export function prepareAntigravityRequest(
           // Append interleaved thinking hint for Claude thinking models with tools.
           // Must come AFTER tool hardening so it is the last system instruction part,
           // preserving the stable prefix for prompt cache matching.
-          if (isClaudeThinking && Array.isArray(requestPayload.tools) && (requestPayload.tools as unknown[]).length > 0) {
+          if (headerStyle !== "antigravity" && isClaudeThinking && Array.isArray(requestPayload.tools) && (requestPayload.tools as unknown[]).length > 0) {
             appendClaudeThinkingHint(requestPayload as Record<string, unknown>);
           }
         }
@@ -1622,7 +1622,7 @@ export function prepareAntigravityRequest(
 
           // Force recovery if API returned thinking_block_order error (retry case)
           // or if proactive check detects we need recovery
-          if (forceThinkingRecovery || needsThinkingRecovery(conversationState)) {
+          if (headerStyle !== "antigravity" && (forceThinkingRecovery || needsThinkingRecovery(conversationState))) {
             // Set message for toast notification (shown in plugin.ts, respects quiet mode)
             thinkingRecoveryMessage = forceThinkingRecovery
               ? "Thinking recovery: retrying with fresh turn (API error)"
@@ -1697,7 +1697,7 @@ export function prepareAntigravityRequest(
 
   // Add interleaved thinking header for Claude thinking models
   // This enables real-time streaming of thinking tokens
-  if (isClaudeThinking) {
+  if (headerStyle !== "antigravity" && isClaudeThinking) {
     const existing = headers.get("anthropic-beta");
     const interleavedHeader = "interleaved-thinking-2025-05-14";
 
