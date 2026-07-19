@@ -17,6 +17,7 @@ import {
 import { fetchWithAgyCliTransport } from "./agy-transport";
 import { buildFingerprintHeaders, getSessionFingerprint } from "./fingerprint";
 import { createLogger } from "./logger";
+import { createAgyRequestSessionContext } from "@cortexkit/antigravity-auth-core";
 
 const log = createLogger("search");
 
@@ -101,16 +102,14 @@ export interface SearchResult {
 // Helper Functions
 // ============================================================================
 
-let sessionCounter = 0;
-const sessionPrefix = `search-${Date.now().toString(36)}`;
+const agySession = createAgyRequestSessionContext("");
+
+function getSessionId(): string {
+  return agySession.numericSessionId;
+}
 
 function generateRequestId(): string {
   return `agent/${crypto.randomUUID()}/${Date.now()}/${crypto.randomUUID()}/2`;
-}
-
-function getSessionId(): string {
-  sessionCounter++;
-  return `${sessionPrefix}-${sessionCounter}`;
 }
 
 function formatSearchResult(result: SearchResult): string {
