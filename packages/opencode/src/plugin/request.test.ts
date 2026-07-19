@@ -1574,10 +1574,10 @@ it("removes x-api-key header", () => {
       // Entry with valid parts keeps them (invalid parts replaced with sentinel to preserve indices)
       expect(wrapped.request.contents[1]).toEqual({
         role: "model",
-        parts: [{ text: "." }, { text: "kept" }],
+        parts: [{ text: "" }, { text: "kept" }],
       });
       // systemInstruction parts: null replaced with sentinel, valid parts kept
-      expect(wrapped.request.systemInstruction.parts).toEqual([{ text: "." }, { text: "system kept" }]);
+      expect(wrapped.request.systemInstruction.parts).toEqual([{ text: "" }, { text: "system kept" }]);
     });
 
     it("drops systemInstruction when all parts are invalid", () => {
@@ -1744,12 +1744,11 @@ it("removes x-api-key header", () => {
           "user",
           "model",
           "user",
-          "model",
-          "user",
         ]);
-        expect(serialized).toContain("Interleaved thinking is enabled");
-        expect(serialized).toContain("[Tool execution completed.]");
-        expect(serialized).toContain("[Continue]");
+        // In antigravity mode, thinking hints and tool loop closing are skipped (proxy manages these)
+        expect(serialized).not.toContain("Interleaved thinking is enabled");
+        expect(serialized).not.toContain("[Tool execution completed.]");
+        expect(serialized).not.toContain("[Continue]");
       });
 
       it("maps Gemini 3.5 Flash medium variant to the live Antigravity medium-tier model", () => {

@@ -555,7 +555,7 @@ function configureAntigravityToolCalling(payload: Record<string, unknown>): void
   payload.toolConfig = toolConfig;
 }
 
-function sanitizeRequestPayloadForAntigravity(payload: Record<string, unknown>): void {
+function sanitizeRequestPayloadForAntigravity(payload: Record<string, unknown>, isGemini = false): void {
   const anyPayload = payload as any;
 
   if (Array.isArray(anyPayload.contents)) {
@@ -684,6 +684,19 @@ function sanitizeRequestPayloadForAntigravity(payload: Record<string, unknown>):
         delete anyPayload.systemInstruction;
       }
     }  }
+
+  // Gemini: replace dot sentinels with empty strings to prevent dot echo in output.
+  // Claude needs dots because the proxy rejects empty text blocks.
+  if (isGemini) {
+    const replaceDotSentinels = (obj: unknown): void => {
+      if (!obj || typeof obj !== "object") return;
+      if (Array.isArray(obj)) { obj.forEach(replaceDotSentinels); return; }
+      const rec = obj as Record<string, unknown>;
+      if (typeof rec.text === "string" && rec.text === ".") rec.text = "";
+      for (const val of Object.values(rec)) replaceDotSentinels(val);
+    };
+    replaceDotSentinels(anyPayload);
+  }
 }
 
 function isGeminiToolUsePart(part: any): boolean {
@@ -1158,7 +1171,7 @@ export function prepareAntigravityRequest(
           }
 
           if (headerStyle === "antigravity") {
-            sanitizeRequestPayloadForAntigravity(req);
+            sanitizeRequestPayloadForAntigravity(req, !isClaude);
             stripUnsupportedAntigravityFields(req);
             configureAntigravityToolCalling(req);
           }
@@ -1751,7 +1764,7 @@ export function prepareAntigravityRequest(
         }
 
         stripInjectedDebugFromRequestPayload(requestPayload);
-        sanitizeRequestPayloadForAntigravity(requestPayload);
+        sanitizeRequestPayloadForAntigravity(requestPayload, !isClaude);
         if (headerStyle === "antigravity") {
           stripUnsupportedAntigravityFields(requestPayload);
           configureAntigravityToolCalling(requestPayload);
