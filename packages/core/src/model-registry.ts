@@ -108,6 +108,16 @@ const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       high: { thinkingLevel: "high" },
     },
   }),
+  "antigravity-gemini-3.6-flash": defineModel("antigravity-gemini-3.6-flash", {
+    name: "Gemini 3.6 Flash (Antigravity)",
+    reasoning: true,
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+    variants: {
+      low: { thinkingLevel: "low" },
+      high: { thinkingLevel: "high" },
+    },
+  }),
   "antigravity-claude-sonnet-4-6-thinking": defineModel("antigravity-claude-sonnet-4-6-thinking", {
     name: "Claude Sonnet 4.6 Thinking (Antigravity)",
     reasoning: true,
@@ -211,6 +221,9 @@ const RESOLVER_ALIASES: Record<string, string> = {
   "gemini-3.5-flash-low": "gemini-3.5-flash",
   "gemini-3.5-flash-medium": "gemini-3.5-flash",
   "gemini-3.5-flash-high": "gemini-3.5-flash",
+  "gemini-3.6-flash-low": "gemini-3.6-flash",
+  "gemini-3.6-flash-medium": "gemini-3.6-flash",
+  "gemini-3.6-flash-high": "gemini-3.6-flash",
   "gemini-claude-opus-4-6-thinking-low": "claude-opus-4-6-thinking",
   "gemini-claude-opus-4-6-thinking-medium": "claude-opus-4-6-thinking",
   "gemini-claude-opus-4-6-thinking-high": "claude-opus-4-6-thinking",
@@ -236,6 +249,18 @@ const GEMINI_35_FLASH_ROUTES: Gemini35FlashRouteMetadata = {
   geminiCliFallbackModel: "gemini-3-flash-preview",
 }
 
+const GEMINI_36_FLASH_ROUTES = {
+  antigravity: {
+    defaultModel: "gemini-3.6-flash-medium",
+    byTier: {
+      low: "gemini-3.6-flash-low",
+      medium: "gemini-3.6-flash-medium",
+      high: "gemini-3.6-flash-high",
+    },
+  },
+  geminiCliFallbackModel: "gemini-3.6-flash-medium",
+}
+
 const QUOTA_GROUP_BY_MODEL_ID: Record<string, ModelQuotaGroup> = {
   "claude-opus-4-6-thinking": "claude",
   "claude-opus-4-6": "claude",
@@ -250,12 +275,16 @@ const QUOTA_GROUP_BY_MODEL_ID: Record<string, ModelQuotaGroup> = {
   "gemini-3.5-flash-low": "gemini-flash",
   "gemini-3.5-flash-extra-low": "gemini-flash",
   "gemini-3.1-flash-image": "gemini-flash",
+  "gemini-3.6-flash-low": "gemini-flash",
+  "gemini-3.6-flash-medium": "gemini-flash",
+  "gemini-3.6-flash-high": "gemini-flash",
   "gpt-oss-120b": "gpt-oss",
   "gpt-oss-120b-medium": "gpt-oss",
 }
 
 const ANTIGRAVITY_OPENCODE_MODEL_IDS = [
   "antigravity-gemini-3.5-flash",
+  "antigravity-gemini-3.6-flash",
   "antigravity-gemini-3.1-pro",
   "antigravity-claude-sonnet-4-6-thinking",
   "antigravity-claude-opus-4-6-thinking",
@@ -288,6 +317,17 @@ export function getGemini35FlashAntigravityModel(tier?: ThinkingTier): string {
 
 export function getGemini35FlashGeminiCliFallbackModel(): string {
   return GEMINI_35_FLASH_ROUTES.geminiCliFallbackModel
+}
+
+export function getGemini36FlashAntigravityModel(tier?: ThinkingTier): string {
+  if (!tier) {
+    return GEMINI_36_FLASH_ROUTES.antigravity.defaultModel
+  }
+  return GEMINI_36_FLASH_ROUTES.antigravity.byTier[tier] ?? GEMINI_36_FLASH_ROUTES.antigravity.defaultModel
+}
+
+export function getGemini36FlashGeminiCliFallbackModel(): string {
+  return GEMINI_36_FLASH_ROUTES.geminiCliFallbackModel
 }
 
 export function getQuotaGroupForModel(modelId: string): ModelQuotaGroup | undefined {

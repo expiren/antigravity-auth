@@ -105,7 +105,8 @@ const ANTIGRAVITY_ENVELOPE_FIELD_ORDER = [
 
 function getAgyMaxOutputTokens(model: string): number | undefined {
   const lower = model.toLowerCase();
-  if (lower === "gemini-3.5-flash-low" || lower === "gemini-3.5-flash-extra-low" || lower === "gemini-3-flash-agent") {
+  if (lower === "gemini-3.5-flash-low" || lower === "gemini-3.5-flash-extra-low" || lower === "gemini-3-flash-agent" ||
+      lower === "gemini-3.6-flash-high" || lower === "gemini-3.6-flash-medium" || lower === "gemini-3.6-flash-low") {
     return 65536;
   }
   if (lower === "gemini-3.1-pro-low" || lower === "gemini-pro-agent") {

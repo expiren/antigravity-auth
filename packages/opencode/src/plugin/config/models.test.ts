@@ -19,6 +19,7 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       "antigravity-claude-sonnet-4-6-thinking",
       "antigravity-gemini-3.1-pro",
       "antigravity-gemini-3.5-flash",
+      "antigravity-gemini-3.6-flash",
     ]);
   });
 
